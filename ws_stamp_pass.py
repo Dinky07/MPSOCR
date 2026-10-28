@@ -9,6 +9,7 @@ DRY RUN unless --apply: reports/ws stamp pass <stamp>[ dry run].csv/.json, nothi
   fields.stamp_check (the whole verdict), fields.stamp_ok;
   fields.stamped / stamp_date / stamp_date_as_written from the close read (the full-page reading copied the WS date
     into blank stamps; it is kept once as stamp_date_page / stamp_date_page_as_written / stamped_page);
+  fields.stamp_copy: the stamp was found only in black and white (no red ink): a copy (Dino 28 Oct, ws-stamp-3);
   a review check for anything not clean; not clean -> hold with the reason; a clean sheet that was held ONLY by this
   gate goes back to the queue. Sheets held for other reasons stay held.
 Workshop sheets sync only on request, so nothing reaches SharePoint from here.
@@ -65,7 +66,7 @@ for js in files:
                  "status": g.get("status"), "why": g.get("why") or "", "red_ink": g.get("red_ink"),
                  "candidates": len(g.get("candidates") or []), "stamp_date": g.get("stamp_date") or "",
                  "as_written": g.get("stamp_date_as_written") or "", "sheet_date": g.get("sheet_date") or "",
-                 "gap_days": g.get("gap_days", ""), "page_stamped": f.get("stamped"), "page_stamp_date": f.get("stamp_date") or "",
+                 "gap_days": g.get("gap_days", ""), "copy": g.get("copy", ""), "page_stamped": f.get("stamped"), "page_stamp_date": f.get("stamp_date") or "",
                  "secs": round(time.time() - t0, 1)})
     if len(rows) % 25 == 0:
         print(f"  {len(rows)} sheets, {time.time() - t0:.0f}s", flush=True)
@@ -76,6 +77,7 @@ for js in files:
     if "stamp_date_page" not in f:
         f["stamped_page"], f["stamp_date_page"], f["stamp_date_page_as_written"] = f.get("stamped"), f.get("stamp_date"), f.get("stamp_date_as_written")
     f["stamp_check"], f["stamp_ok"] = g, g.get("status") == "clean"
+    f["stamp_copy"] = bool(g.get("copy"))          # Dino 28 Oct: black-and-white stamp = a copy of the sheet
     if g.get("stamp") in ("high", "none"):
         f["stamped"] = g.get("stamp") == "high"
         f["stamp_date"] = g.get("stamp_date")
@@ -109,6 +111,7 @@ c = Counter(r["status"] for r in rows)
 summary = {"sheets": len(rows), "status": dict(c), "applied": a.apply, "model": model,
            "cad_text_layer": sum(1 for r in rows if r["how"] == "text_layer"),
            "scans_with_red_ink": sum(1 for r in rows if r["red_ink"]),
+           "copies_black_and_white_stamp": sum(1 for r in rows if r["copy"] is True),
            "check_date_why": dict(Counter(("blank" if "blank" in r["why"] else "not readable" if "readable" in r["why"]
                                            else "outside the month" if "days from" in r["why"] else r["why"][:40])
                                           for r in rows if r["status"] == "check_date")),

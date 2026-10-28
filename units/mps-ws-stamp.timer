@@ -1,0 +1,9 @@
+[Unit]
+Description=MPS workshop sheets stamp gate, daily after the night's reading
+
+[Timer]
+OnCalendar=*-*-* 06:40:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target

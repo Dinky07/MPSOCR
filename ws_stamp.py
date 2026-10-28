@@ -150,7 +150,7 @@ def crop(pdf, stamp, out_png, page=1, dpi=300):
     return out_png
 
 
-VERSION = "ws-stamp-2 (27 Oct)"
+VERSION = "ws-stamp-3 (28 Oct)"
 WINDOW_DAYS = 31          # Dino 27 Oct: "anything that looks like this stamp and has a date within a month of the WSS date"
 
 # No example dates (v1's "2017-01" + "10" came back as the date of blank stamps); says the DATE space is often blank;
@@ -171,12 +171,54 @@ PROMPT = (
     "null, \"day_written\": text or null, \"date_iso\": \"YYYY-MM-DD\" or null}")
 
 
-def read_stamp(png, ollama_url, model, keep_alive="15m", timeout=600, num_ctx=49152):
+# Dino 28 Oct: a black-and-white scan of the stamp is a photocopy - accepted like the red one, marked as a copy.
+PROMPT_COPY = PROMPT.replace("MPS's quality stamp is a red rubber stamp", "MPS's quality stamp is a rubber stamp (red ink on the "
+                             "original; this is a black-and-white copy, so it shows grey or black)").replace(
+    "true only if that red stamp", "true only if that stamp").replace("red handwriting", "handwriting")
+STAMP_WORDS = re.compile(r"ISSU|CONSTRUC|APPROV", re.I)
+
+
+def find_bw(pdf, out_png, page=1):
+    """No red ink (greyscale scan or a photocopy): the stamp's printed words found by Tesseract on the page turned
+    0/90/180/270 degrees; two or more of ISSUED / CONSTRUCTION / APPROVED close together = the stamp. Writes the stamp
+    area (upright, 300 dpi) to out_png and returns {"box", "angle", "words"} or None."""
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            im = _render(pdf, page, 300, os.path.join(td, "p")).convert("L")
+        except Exception:
+            return None
+        for rot in (0, 90, 270, 180):
+            r = im.rotate(rot, expand=True, fillcolor=255) if rot else im
+            small = r.resize((r.size[0] * 2 // 3, r.size[1] * 2 // 3))        # 200 dpi for Tesseract
+            tsv = subprocess.run(["tesseract", "-", "-", "--psm", "11", "tsv"], input=_png(small), capture_output=True,
+                                 timeout=180).stdout.decode("utf8", "ignore").splitlines()
+            words = []
+            for line in tsv[1:]:
+                c = line.split("\t")
+                if len(c) >= 12 and STAMP_WORDS.search(c[11] or ""):
+                    x, y, w, h = (int(v) * 3 // 2 for v in c[6:10])
+                    words.append((c[11], x, y, w, h))
+            for i, (t, x, y, w, h) in enumerate(words):
+                near = [v for v in words if abs(v[1] - x) < r.size[0] * 0.18 and abs(v[2] - y) < r.size[1] * 0.08]
+                kinds = {re.match(r"(ISSU|CONSTRUC|APPROV)", v[0].upper()).group(1) for v in near
+                         if re.match(r"(ISSU|CONSTRUC|APPROV)", v[0].upper())}
+                if len(kinds) >= 2:
+                    x0 = min(v[1] for v in near); y0 = min(v[2] for v in near)
+                    x1 = max(v[1] + v[3] for v in near); y1 = max(v[2] + v[4] for v in near)
+                    pw, ph = (x1 - x0), (y1 - y0)
+                    box = (max(0, x0 - pw * 0.35), max(0, y0 - ph * 1.6), min(r.size[0], x1 + pw * 0.35), min(r.size[1], y1 + ph * 1.6))
+                    r.crop(tuple(int(v) for v in box)).save(out_png)
+                    return {"box": [round(box[0] / r.size[0], 3), round(box[1] / r.size[1], 3), round(box[2] / r.size[0], 3),
+                                    round(box[3] / r.size[1], 3)], "angle": rot, "words": sorted(kinds)}
+    return None
+
+
+def read_stamp(png, ollama_url, model, keep_alive="15m", timeout=600, num_ctx=49152, prompt=None):
     """The vision model on a cropped stamp: {is_ifc_stamp, date_blank, year_month_written, day_written, date_iso}."""
     import base64, json, urllib.request
     body = {"model": model, "stream": False, "format": "json", "keep_alive": keep_alive,
             "options": {"temperature": 0, "num_ctx": num_ctx, "num_predict": 200},
-            "messages": [{"role": "user", "content": PROMPT, "images": [base64.b64encode(open(png, "rb").read()).decode()]}]}
+            "messages": [{"role": "user", "content": prompt or PROMPT, "images": [base64.b64encode(open(png, "rb").read()).decode()]}]}
     req = urllib.request.Request(ollama_url.rstrip("/") + "/api/chat", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         raw = json.loads(r.read())["message"]["content"]
@@ -249,6 +291,24 @@ def check(pdf, fields, how, ollama_url, model, keep_alive="15m", timeout=600, na
         if r.get("is_ifc_stamp"):
             hit = out["candidates"][-1]
             break
+    if not hit and not stamps:
+        # no red ink at all: a black-and-white scan / photocopy of the stamp is accepted and marked as a copy (Dino 28 Oct)
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                png = os.path.join(td, "bw.png")
+                bw = find_bw(pdf, png)
+                if bw:
+                    r = read_stamp(png, ollama_url, model, keep_alive, timeout, prompt=PROMPT_COPY)
+                    iso = None if r.get("date_blank") else to_iso(r)
+                    out["candidates"].append({"box": bw["box"], "words": bw["words"], "is_ifc_stamp": bool(r.get("is_ifc_stamp")),
+                                              "date_blank": r.get("date_blank"), "year_month_written": r.get("year_month_written"),
+                                              "day_written": r.get("day_written"), "date": iso, "copy": True})
+                    if r.get("is_ifc_stamp"):
+                        hit = out["candidates"][-1]
+                        out["copy"] = True
+        except Exception as e:
+            out.update(status="check_stamp", stamp="unknown", why=f"black-and-white close read failed: {str(e)[:120]}")
+            return out
     if not hit:
         if not stamps and out["model_stamped_page"]:
             out.update(status="check_stamp", stamp="unknown", why="no red ink found (greyscale scan?), the page reading saw a stamp")
@@ -256,6 +316,7 @@ def check(pdf, fields, how, ollama_url, model, keep_alive="15m", timeout=600, na
             out.update(status="no_stamp", stamp="none",
                        why="red ink found but none of it is the MPS stamp" if stamps else "no stamp")
         return out
+    out.setdefault("copy", False)
     out.update(stamp="high", box=hit["box"], stamp_date=hit["date"],
                stamp_date_as_written=" / ".join(str(x) for x in (hit["year_month_written"], hit["day_written"]) if x) or None)
     if not hit["date"]:

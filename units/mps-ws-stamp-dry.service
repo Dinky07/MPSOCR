@@ -1,0 +1,11 @@
+[Unit]
+Description=MPS workshop sheets: stamp gate DRY RUN over every sheet (ws_stamp_pass.py --all), report only
+
+[Service]
+Type=simple
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/usr/bin/python3 -u /srv/ocr/pipeline/ws_stamp_pass.py --all
+Nice=10
+RuntimeMaxSec=8h
