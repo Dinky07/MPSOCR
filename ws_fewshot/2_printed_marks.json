@@ -1,0 +1,40 @@
+{
+ "doc_type": "workshop_sheet",
+ "layout": "printed_form",
+ "date_as_written": "16-01-2018",
+ "date_iso": "2018-01-16",
+ "sheet_no": 1,
+ "sheet_of": 12,
+ "project": "SEAPRO",
+ "corrosion_int": "HOT DIP GALV.",
+ "corrosion_ext": "HOT DIP GALV.",
+ "destination": null,
+ "job_number": "8188 D",
+ "spec": "AS BELOW",
+ "customer_dwg_no": null,
+ "rev": null,
+ "mps_dwg_no": "ED01",
+ "batch_no": null,
+ "mto": "01",
+ "drawn_by": null,
+ "stamped": false,
+ "ifc_signed": false,
+ "stamp_date_as_written": null,
+ "stamp_date_iso": null,
+ "status": null,
+ "end_detail": "F.B.E 1000/3 F/F",
+ "lines": [
+  {
+   "item_no": "01",
+   "mark": "UA1.1",
+   "qty": 4,
+   "size": "150NB x SANS 62 MED",
+   "dwg_no": "13.D002",
+   "dims": {
+    "A": "630"
+   }
+  }
+ ],
+ "notes": null,
+ "legibility": "good"
+}

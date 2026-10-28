@@ -1,0 +1,42 @@
+{
+ "doc_type": "workshop_sheet",
+ "layout": "printed_form",
+ "date_as_written": "17-01-2017",
+ "date_iso": "2017-01-17",
+ "sheet_no": 1,
+ "sheet_of": 3,
+ "project": "WK CONSTRUCTION",
+ "corrosion_int": "NO COATING",
+ "corrosion_ext": "NO COATING",
+ "destination": null,
+ "job_number": "5368 D",
+ "spec": "AS BELOW",
+ "customer_dwg_no": null,
+ "rev": null,
+ "mps_dwg_no": "WK1",
+ "batch_no": "001",
+ "mto": null,
+ "drawn_by": null,
+ "stamped": true,
+ "ifc_signed": false,
+ "stamp_date_as_written": null,
+ "stamp_date_iso": null,
+ "status": null,
+ "end_detail": "F.B.E 1000/3 F/F; L/R/E 45° C/F=221",
+ "lines": [
+  {
+   "item_no": "01",
+   "mark": null,
+   "qty": 1,
+   "size": "350NB x 6mm",
+   "dwg_no": null,
+   "dims": {
+    "A": "227",
+    "R": "533.4",
+    "θ": "45°"
+   }
+  }
+ ],
+ "notes": null,
+ "legibility": "good"
+}

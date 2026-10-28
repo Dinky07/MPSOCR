@@ -1,0 +1,5 @@
+[Unit]
+Description=MPS: record a failed unit (%i) as flags/alert_<unit> for the dashboard (review F9, 28 Oct)
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'f=/srv/ocr/scans/pipeline/flags/alert_%i; { date -Is; journalctl -u %i -n 12 --no-pager -o cat | cut -c1-200; } > "$f"; chown dinoc:dinoc "$f"'

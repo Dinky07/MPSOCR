@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS purchase orders: checking file when the day's batch is read (*-*-* 03:05:00)
+[Timer]
+OnCalendar=*-*-* 03:05:00
+Persistent=true
+Unit=mps-po-check.service
+[Install]
+WantedBy=timers.target

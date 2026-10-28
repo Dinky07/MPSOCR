@@ -1,0 +1,32 @@
+{
+ "doc_type": "purchase_order",
+ "form": "mps_order",
+ "order_number": "A84403",
+ "other_po_ref": null,
+ "supplier": "HI Q",
+ "att_of": "TSUMBEDZO",
+ "order_method": "EMAIL",
+ "transfer_from": null,
+ "transfer_to": null,
+ "date_as_written": "4.09.2025",
+ "date_iso": "2025-09-04",
+ "allocation": "VEHICLES",
+ "job_number": null,
+ "lines": [
+  {
+   "qty": 2,
+   "open_quantity": false,
+   "description": "12225 M38 RETREAD MPS",
+   "unit_price": 1996.16,
+   "price_unit": "each"
+  }
+ ],
+ "quote_ref": "61967",
+ "payment_terms": "DISC: 2.5% 30 DAYS",
+ "notes": "JOB CARD: 005564:005563",
+ "delivery_address": null,
+ "writer": "Melyssa",
+ "signed_by": "Melyssa",
+ "cancelled": false,
+ "legibility": "good"
+}

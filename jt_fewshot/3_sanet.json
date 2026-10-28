@@ -1,0 +1,24 @@
+{
+ "jt_number": "79181",
+ "customer": "MPS (Harmony-Mponeng)",
+ "mps_job_no": "32591E",
+ "date": "30/05/2026",
+ "transferred_from": "KUSASA",
+ "transferred_to": "MPS - Fred",
+ "line_items": [
+  {
+   "quantity": "1",
+   "item_no": null,
+   "description": "500mm x 9.475m CL12 UPVC PIPE belled one end. (mpvc material mix)"
+  },
+  {
+   "quantity": "1",
+   "item_no": null,
+   "description": "500mm x 10m CL12 UPVC PIPE plain ended"
+  }
+ ],
+ "remarks": "Breakdown: Johan de Wet | Note: UPVC spec but mpvc material formulation | Reg No: LF72WN GP",
+ "transferred_by": "[signature]",
+ "received_by": "[signature]",
+ "receiving_stamp": null
+}

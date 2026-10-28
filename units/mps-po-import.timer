@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS purchase orders: import the rows marked Use as Checked (*-*-* 19:30:00)
+[Timer]
+OnCalendar=*-*-* 19:30:00
+Persistent=true
+Unit=mps-po-import.service
+[Install]
+WantedBy=timers.target

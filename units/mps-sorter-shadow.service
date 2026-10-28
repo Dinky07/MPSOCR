@@ -1,0 +1,10 @@
+[Unit]
+Description=MPS document sorter - shadow run (classify the day's documents, compare, change nothing)
+After=network-online.target
+[Service]
+Type=oneshot
+User=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/sorter.py shadow
+TimeoutStartSec=5h
+Nice=10

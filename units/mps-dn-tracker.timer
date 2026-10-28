@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS delivery note scan tracker (*-*-* 05:30:00)
+[Timer]
+OnCalendar=*-*-* 05:30:00
+Persistent=true
+Unit=mps-dn-tracker.service
+[Install]
+WantedBy=timers.target

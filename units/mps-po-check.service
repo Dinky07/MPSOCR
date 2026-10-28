@@ -1,0 +1,9 @@
+[Unit]
+OnFailure=mps-alert@%n.service
+Description=MPS purchase orders: checking file when the day's batch is read
+[Service]
+Type=oneshot
+User=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/po_daily.py watch
+TimeoutStartSec=13h

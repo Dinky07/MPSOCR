@@ -1,0 +1,9 @@
+[Unit]
+Description=MPS OCR nightly quick training at 02:15
+
+[Timer]
+OnCalendar=*-*-* 02:15:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target

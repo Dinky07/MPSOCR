@@ -1,0 +1,9 @@
+[Unit]
+OnFailure=mps-alert@%n.service
+Description=MPS test certificates: feed the next 250 backfill files
+[Service]
+Type=oneshot
+User=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/feed_tc.py --batch 250
+TimeoutStartSec=1h

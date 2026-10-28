@@ -1,0 +1,24 @@
+{
+ "jt_number": "80587",
+ "customer": "HARMONY",
+ "mps_job_no": "32139E",
+ "date": "10.04.2026",
+ "transferred_from": "M.P.S",
+ "transferred_to": "POLYMER LINING",
+ "line_items": [
+  {
+   "quantity": "10",
+   "item_no": "1",
+   "description": "ONLY 250NB x 6THK x 1.800LG FBE | 1600/3 FF PIPES (SH 1/1)"
+  },
+  {
+   "quantity": "10",
+   "item_no": "2",
+   "description": "ONLY 350NB x 6THK x 1.800LG FBE | 1600/3 FF PIPES (SH 1/1)"
+  }
+ ],
+ "remarks": "INT: R/LINE 6mm 50 SHORE RUBBER | EXT: RED OXIDE | URGENT PLEASE!!",
+ "transferred_by": "[signature]",
+ "received_by": "[signature]",
+ "receiving_stamp": null
+}

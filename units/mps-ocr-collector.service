@@ -1,0 +1,17 @@
+[Unit]
+Description=MPS OCR NAS collector (read-only NAS scan folders -> pipeline in/ queue)
+After=network-online.target remote-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dinoc
+Group=dinoc
+Environment=MPS_OCR_CONFIG=/srv/ocr/pipeline/config.json
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/collector.py
+Restart=always
+RestartSec=30
+UMask=0002
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,24 @@
+{
+ "jt_number": "80191",
+ "customer": null,
+ "mps_job_no": "32454E|32452E",
+ "date": "27/5/2026",
+ "transferred_from": "MPS LINERS",
+ "transferred_to": "MPS",
+ "line_items": [
+  {
+   "quantity": "2",
+   "item_no": "LENGTHS",
+   "description": "200NB x 10 x 12,192 mlg HAL"
+  },
+  {
+   "quantity": "11",
+   "item_no": "LENGTHS",
+   "description": "500NB x 10 x 12,192 mlg GARSIN"
+  }
+ ],
+ "remarks": null,
+ "transferred_by": "[signature]",
+ "received_by": "[signature]",
+ "receiving_stamp": null
+}

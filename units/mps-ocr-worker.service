@@ -1,0 +1,20 @@
+[Unit]
+Description=MPS OCR pipeline worker (drop folders -> Qwen3-VL -> out folders)
+After=network-online.target docker.service ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dinoc
+Group=dinoc
+Environment=MPS_OCR_CONFIG=/srv/ocr/pipeline/config.json
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/worker.py
+Restart=always
+RestartSec=10
+# SIGTERM lets the current page finish; the file goes back into the queue
+TimeoutStopSec=120
+KillMode=mixed
+UMask=0002
+
+[Install]
+WantedBy=multi-user.target

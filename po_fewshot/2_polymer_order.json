@@ -1,0 +1,32 @@
+{
+ "doc_type": "purchase_order",
+ "form": "polymer_order",
+ "order_number": "PL7512",
+ "other_po_ref": "PO 6573",
+ "supplier": "JOTUN PAINTS",
+ "order_method": "EMAIL",
+ "transfer_from": null,
+ "transfer_to": null,
+ "date_as_written": "5.06.2025",
+ "date_iso": "2025-06-05",
+ "allocation": null,
+ "job_number": null,
+ "lines": [
+  {
+   "qty": 500,
+   "description": "LTRS JOTUN PILOT QD RED OXIDE",
+   "unit_price": 71.52,
+   "price_unit": "litre",
+   "open_quantity": false
+  }
+ ],
+ "quote_ref": null,
+ "notes": "CALL OFF: DELIVER 200 LT",
+ "delivery_address": null,
+ "signed_by": "MELYSSA",
+ "legibility": "good",
+ "att_of": "SALES",
+ "payment_terms": "DISC: 2.5% 30 DAYS",
+ "writer": "Melyssa",
+ "cancelled": false
+}

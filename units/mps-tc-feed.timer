@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS test certificates: feed the next 250 backfill files (*-*-* 09:00:00)
+[Timer]
+OnCalendar=*-*-* 09:00:00
+Persistent=true
+Unit=mps-tc-feed.service
+[Install]
+WantedBy=timers.target

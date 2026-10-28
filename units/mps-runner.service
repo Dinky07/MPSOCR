@@ -1,0 +1,11 @@
+[Unit]
+Description=MPS runner: executes scripts dropped in the pipeline share's _src/run folder (start by hand, stop when done)
+After=network-online.target remote-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/mps-runner.sh
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,44 @@
+{
+ "doc_type": "workshop_sheet",
+ "layout": "handwritten_form",
+ "date_as_written": "2017-01-10",
+ "date_iso": "2017-01-10",
+ "sheet_no": 2,
+ "sheet_of": 2,
+ "project": "HARMONY",
+ "corrosion_int": null,
+ "corrosion_ext": null,
+ "destination": "GALVANISING",
+ "job_number": "J 5977 D",
+ "spec": null,
+ "customer_dwg_no": null,
+ "rev": null,
+ "mps_dwg_no": null,
+ "batch_no": null,
+ "mto": null,
+ "drawn_by": null,
+ "stamped": true,
+ "ifc_signed": true,
+ "stamp_date_as_written": "2017-01 10",
+ "stamp_date_iso": "2017-01-10",
+ "status": null,
+ "end_detail": "FBE: 1000/3 F/F S/O FLG",
+ "lines": [
+  {
+   "item_no": "3",
+   "mark": null,
+   "qty": 2,
+   "size": "300NB",
+   "dwg_no": null,
+   "dims": {
+    "Thk": "SCH 40",
+    "A": "305mm",
+    "B": "305mm",
+    "θ": "45°",
+    "SEG": "3"
+   }
+  }
+ ],
+ "notes": "GUSSET BEND",
+ "legibility": "fair"
+}

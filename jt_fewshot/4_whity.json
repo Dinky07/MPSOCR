@@ -1,0 +1,24 @@
+{
+ "jt_number": "80382",
+ "customer": null,
+ "mps_job_no": "KUSASA",
+ "date": "04-09-26",
+ "transferred_from": "M.P.S.",
+ "transferred_to": "Ted plastics",
+ "line_items": [
+  {
+   "quantity": "4",
+   "item_no": null,
+   "description": "180mm 1.5mtrs For 90°"
+  },
+  {
+   "quantity": "8",
+   "item_no": null,
+   "description": "180mm 1.5mtrs For 45°"
+  }
+ ],
+ "remarks": "Free issue material as / per Liz / Ivor / Belinda on order A84110",
+ "transferred_by": "[signature]",
+ "received_by": null,
+ "receiving_stamp": null
+}

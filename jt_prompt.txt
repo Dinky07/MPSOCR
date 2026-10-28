@@ -1,0 +1,41 @@
+This is a Mining Pressure Systems (MPS) JOB TRANSFER form, partly handwritten.
+Extract the fields into the JSON schema.
+Rules:
+- Transcribe handwriting exactly as written; do not correct spelling or expand abbreviations.
+- Only output line items for rows that actually contain handwriting. Do not output empty rows.
+- A new line item starts only where a QUANTITY is written. Writers leave an empty row above each new
+  quantity, so an empty row followed by a quantity = a new item. Text in the following rows without a
+  quantity is a continuation: append it to the previous item's description, separated by " | ".
+- Exception: a note in the description column that has an empty row above it and NO quantity
+  (e.g. "PLEASE RETURN BY FRIDAY", "URGENT", "PLEASE CUT RECESS AS PER O/W") belongs to the whole form,
+  not an item: put it in remarks (after anything written in the remarks box, separated by " | ").
+- For every line item set blank_row_above: true when the printed table row directly above the item's
+  first row has no handwriting (or the item is in the first row), false when that row has handwriting.
+  If you are unsure whether text is a continuation or a note, output it as its own line item with
+  quantity and item_no null and the correct blank_row_above; it is sorted out afterwards.
+- The quantity is a number in the QUANTITY column at the left of the table; look carefully,
+  it may be faint or overwritten.
+- Ignore diagonal or squiggly lines drawn through empty rows.
+- A rubber stamp box (e.g. Polymer Lining Systems) may appear anywhere on the page.
+- TRANSFERRED FROM / TO are companies or places. A person's name or signature written by the
+  receiver (e.g. SANELE) belongs in received_by, not in transferred_to.
+- Signatures that are scribbles, not legible names: "[signature]". A field with nothing written: null.
+- Illegible text: "[illegible]". Never guess.
+Terms that commonly appear on these forms:
+M.P.S. JOB NO. format: 4 or 5 digits followed by E (e.g. 1075E, 32245E), rarely D,
+  or the words CONS (consumables), VEHICLES, STOCK or MIN003. The trailing letter is sometimes left off.
+  Some writers put a J in front (J32245E): that J is not a digit.
+DATE may be written day first (20/05/2026, 20.05.26) or year first (2026/05/20). Copy it exactly as written.
+Items: SPOOL, CLOSURE, BEND, LRE, PIPE, PLAIN ENDED, WET PIPE, UPVC, PVC, MPVC, HDPE, FBE, ELBOW, TEE,
+  REDUCER, CON REDUCER, STUB, STUB ENDS, FLANGE, FLANGES, FLANGED, BLANK FLANGE, RAISED FACE (R/F, RF),
+  FLAT FACE (F/F, FF), STEPBORE, MACHINED, GASKET, GASKETS, VICTAULIC (VIC), CLAMP, COUPLING, SHOULDERED,
+  BOLTS, NUTS, WASHERS, SPIRAL WOUND
+Nominal bore sizes (NB): 15NB 20NB 25NB 32NB 40NB 50NB 65NB 80NB 100NB 125NB 150NB 200NB 250NB 300NB 350NB
+  400NB 450NB 500NB 550NB 600NB 650NB 700NB 750NB 800NB 850NB 900NB 1000NB 1100NB 1200NB
+Pipe schedules / specs: SCH10 SCH20 SCH40 SCH80 SCH100 SCH160 STD XS XXS, SMLS, SANS, SABS, ASTM, PN, PCD, OD, ID
+Finishes and work: GALV / GALVANISED / HDG, BITUMEN, RUBBER LINED, blast, paint, recap, spec, as per O/W, GF&C,
+  C/W (complete with), S/O (slip on), L/R (long radius), FOE (flanged one end), HBE (hubs both ends)
+Common phrases: "Paint to spec as per O/W", "Please blast to spec as per O/W", "TYRES FOR RECAP"
+MPS staff who write and sign forms: IVOR, FRED, DINO, TINO, HEINE, DIEGO, ASHTON, TEDDY, MELISSA, REBECCA, HANNES,
+  DERRICK, JOANNE
+Companies (short form written on forms = full name): MPS, MPS LINERS, LINERS = MPS LINERS, POLYMER = POLYMER LINING, POLYMER LINING, BC = BC PRECISION COATERS, GALFERRO, WET PIPE, ARMCO = ARMCO GALVANISERS, SMS, KOUPA, NSS = NSS FASTENERS, MARLIN = MARLIN TOOLS, FULL CIRCLE, STEFMET, SPIROTECH, TOPRING = TOP RING ROLLERS, RIGGERS = RIGGERS STEEL, JG = JG ENGINEERING, JG ENGINEERING, FORCEFLO, KUSASA, DNA = DNA FABRICATION, GERMCO, POXYTECH, JOEYS STEEL, CAT ALLOYS, UMP, UMS, NORBRAKE, TED PLASTICS, PLUSFACTOR, STEWARTS AND LLOYDS, HARMONY GOLD, MPONENG, BC COATINGS = BC PRECISION COATERS, ARMCO SUPERLITE = ARMCO GALVANISERS, SMS FLANGES = SMS, KUSASALETHU = HARMONY KUSASALETHU, SITE, ALAC PROPERTIES, NEW BUSINESS SARL = NEW BUSINESS SARL (NBL), NBL = NEW BUSINESS SARL (NBL), TBN TRANSPORT, SMD, REDSTAR = REDSTAR RACEWAY, REDSTAR RACEWAY, WET P P = WET PIPE, JOEYS = JOEYS STEEL, S N S = SMS, TEDDY ELECTRICAL, NORTHAM ZONDEREINDE, NORTHERN ZONDEREINDE = NORTHAM ZONDEREINDE, ZONDEREINDE = NORTHAM ZONDEREINDE, SAHETI SCHOOL, SAHETI = SAHETI SCHOOL, STRETTI SCHOOL = SAHETI SCHOOL, JD GROUP, JD GRO = JD GROUP, BAYLISS LININGS = POLYMER LINING, RYNER LINERS = POLYMER LINING, RYNLER LININGS = POLYMER LINING, RANIL LIMING = POLYMER LINING, P L INK = POLYMER LINING, M I S = MPS, MDC = MPS, TMS = MPS, GOLFEEO = GALFERRO, GNLFEECO = GALFERRO, CALFENE = GALFERRO

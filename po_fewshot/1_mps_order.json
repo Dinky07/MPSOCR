@@ -1,0 +1,88 @@
+{
+ "doc_type": "purchase_order",
+ "form": "mps_order",
+ "order_number": "A80532",
+ "other_po_ref": null,
+ "supplier": "AAA ALARMS",
+ "order_method": "EMAIL",
+ "transfer_from": null,
+ "transfer_to": null,
+ "date_as_written": "4.03.2025",
+ "date_iso": "2025-03-04",
+ "allocation": "CONS",
+ "job_number": null,
+ "lines": [
+  {
+   "qty": null,
+   "description": "ALARM REPAIR:-",
+   "unit_price": null,
+   "price_unit": null,
+   "open_quantity": false
+  },
+  {
+   "qty": 1,
+   "description": "1X IDS X6L (8 ZONE) CONTROL PANEL KIT:-",
+   "unit_price": 2999.95,
+   "price_unit": "each",
+   "open_quantity": false
+  },
+  {
+   "qty": null,
+   "description": "1X IDS X6L (8 ZONE) CONTROL PANEL",
+   "unit_price": null,
+   "price_unit": null,
+   "open_quantity": false
+  },
+  {
+   "qty": null,
+   "description": "1X IDS LED CURVED KEYPAD",
+   "unit_price": null,
+   "price_unit": null,
+   "open_quantity": false
+  },
+  {
+   "qty": null,
+   "description": "1X TRANSFORMER 2LUDC",
+   "unit_price": null,
+   "price_unit": null,
+   "open_quantity": false
+  },
+  {
+   "qty": null,
+   "description": "1X BATTERY 12V",
+   "unit_price": null,
+   "price_unit": null,
+   "open_quantity": false
+  },
+  {
+   "qty": 2,
+   "description": "SHERLOTRONICS 2 BUTTON REMOTE",
+   "unit_price": 165.0,
+   "price_unit": "each",
+   "open_quantity": false
+  },
+  {
+   "qty": 1,
+   "description": "SHERLOTRONICS 2CH RECEIVER",
+   "unit_price": 298.0,
+   "price_unit": "each",
+   "open_quantity": false
+  },
+  {
+   "qty": 1,
+   "description": "LABOUR",
+   "unit_price": 990.0,
+   "price_unit": "each",
+   "open_quantity": false
+  }
+ ],
+ "quote_ref": "QUO 0000599",
+ "notes": "ALARM REPAIR - DRAWING OFFICE",
+ "delivery_address": null,
+ "signed_by": "MELYSSA",
+ "legibility": "good",
+ "att_of": "SALES",
+ "payment_terms": null,
+ "writer": "Melyssa",
+ "cancelled": false
+}

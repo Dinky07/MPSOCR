@@ -1,0 +1,7 @@
+[Unit]
+Description=MPS document sorter shadow run, daily 21:00
+[Timer]
+OnCalendar=*-*-* 21:00:00
+Persistent=false
+[Install]
+WantedBy=timers.target

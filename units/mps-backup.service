@@ -1,0 +1,7 @@
+[Unit]
+OnFailure=mps-alert@%n.service
+Description=MPS pipeline backup to the DS1821+
+After=network-online.target remote-fs.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mps-backup.sh

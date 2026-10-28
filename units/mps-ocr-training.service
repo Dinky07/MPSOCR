@@ -1,0 +1,13 @@
+[Unit]
+OnFailure=mps-alert@%n.service
+Description=MPS OCR nightly quick training (purchase orders, workshop sheets)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+Environment=MPS_OCR_CONFIG=/srv/ocr/pipeline/config.json
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/nightly_training.py
+TimeoutStartSec=6h
+Nice=5

@@ -1,0 +1,32 @@
+{
+ "doc_type": "internal_transfer",
+ "form": "internal_group_transfer",
+ "order_number": "16013",
+ "other_po_ref": null,
+ "supplier": "KUSASA",
+ "order_method": null,
+ "transfer_from": "KUSASA",
+ "transfer_to": "MPS",
+ "date_as_written": "3.10.2025",
+ "date_iso": "2025-10-03",
+ "allocation": "CAPM",
+ "job_number": "31367E",
+ "lines": [
+  {
+   "qty": 500,
+   "description": "LENS 155MM X 6.1M CL7 GREEN PVC DRAIN PIPE WITH STEEL COLLARS BOTH ENDS",
+   "unit_price": 1386.99,
+   "price_unit": "length",
+   "open_quantity": false
+  }
+ ],
+ "quote_ref": null,
+ "notes": "DEL: 23.10.2025",
+ "delivery_address": null,
+ "signed_by": "MELYSSA",
+ "legibility": "good",
+ "att_of": null,
+ "payment_terms": null,
+ "writer": "Melyssa",
+ "cancelled": false
+}

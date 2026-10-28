@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS purchase orders: feed the next 1,000 archive orders (Mon-Fri 03:00)
+[Timer]
+OnCalendar=Mon..Fri 03:00:00
+Persistent=true
+Unit=mps-po-feed.service
+[Install]
+WantedBy=timers.target

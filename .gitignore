@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.bak*
+bak-*/
+backup-*/
+state.db*
+*.tmp
+*.new
+unsloth_compiled_cache/
+po_fewshot/*.png
+ws_fewshot/*.png
+jt_fewshot/*.png
+training/
+*.csv
+*.log

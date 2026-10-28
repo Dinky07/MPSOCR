@@ -1,0 +1,155 @@
+{
+  "root": "/srv/ocr/scans/pipeline",
+  "state_db": "/srv/ocr/pipeline/state.db",
+  "ollama_url": "http://127.0.0.1:11434",
+  "model": "qwen2.5vl:7b",
+  "keep_alive": "4h",
+  "num_ctx": 49152,
+  "ollama_timeout": 900,
+  "dpi": 200,
+  "max_pages_per_doc": 4,
+  "poll_seconds": 5,
+  "stable_seconds": 10,
+  "day_first_dates": true,
+  "collector": {
+    "poll_seconds": 60,
+    "stable_seconds": 60,
+    "sources": [
+      {
+        "path": "/mnt/nas-scans/ScanToFile/Chronoscan/Delivery Notes MPS",
+        "type_folder": "DeliveryNotes",
+        "recursive": true,
+        "pattern": "*",
+        "only_newer_than": "2026-10-21"
+      }
+    ]
+  },
+  "doc_types": {
+    "JobTransfers": {
+      "doc_type": "jt",
+      "split_pages": true,
+      "max_pages": 1,
+      "command": null,
+      "jt_reader": {
+        "model": "qwen2.5vl:7b",
+        "fewshot_dir": "/srv/ocr/pipeline/jt_fewshot",
+        "px": 1600
+      }
+    },
+    "PurchaseOrders": {
+      "doc_type": "po",
+      "split_pages": true,
+      "max_pages": 2,
+      "command": null,
+      "hold_unless": [
+        {
+          "order_number": "^A\\d{5}$"
+        },
+        {
+          "form": "^internal_group_transfer$",
+          "order_number": "^\\d{5}$"
+        }
+      ],
+      "proof_of_payment": "keep"
+    },
+    "SupplierInvoices": {
+      "doc_type": "supplier_invoice",
+      "split_pages": false,
+      "max_pages": 4,
+      "command": null,
+      "cpu_first": true,
+      "cpu": {
+        "require_items": true,
+        "ocr_dpi": 300,
+        "ocr_lang": "eng",
+        "vat_rates": [
+          0.15,
+          0.14
+        ],
+        "own_vat_numbers": [
+          "4320123039"
+        ],
+        "supplier_csv": "/srv/ocr/scans/pipeline/suppliers.csv"
+      },
+      "model": "qwen3-vl:8b-instruct"
+    },
+    "SupplierInvoicesArchive": {
+      "doc_type": "supplier_invoice",
+      "split_pages": false,
+      "max_pages": 4,
+      "command": null,
+      "cpu_first": true,
+      "cpu": {
+        "require_items": true,
+        "ocr_dpi": 300,
+        "ocr_lang": "eng",
+        "vat_rates": [
+          0.15,
+          0.14
+        ],
+        "own_vat_numbers": [
+          "4320123039"
+        ],
+        "supplier_csv": "/srv/ocr/scans/pipeline/suppliers.csv"
+      },
+      "model": "qwen3-vl:8b-instruct"
+    },
+    "PolymerOrders": {
+      "doc_type": "po",
+      "split_pages": true,
+      "max_pages": 2,
+      "command": null,
+      "label": "Polymer Orders"
+    },
+    "ProofOfPayments": {
+      "doc_type": "pop",
+      "label": "Proof of Payments",
+      "max_pages": 2
+    },
+    "DeliveryNotes": {
+      "doc_type": "delivery_note",
+      "label": "Delivery Notes",
+      "dn": {
+        "barcode_pattern": "^IN\\d{5,7}$",
+        "prefer_company": "MPS",
+        "sage_csv": "sage_invoices.csv",
+        "ocr": true,
+        "ocr_jobs": 4,
+        "hold_if_not_in_sage": true
+      }
+    },
+    "WorkshopSheets": {
+      "doc_type": "ws",
+      "label": "Workshop Sheets",
+      "ws_reader": {
+        "model": "qwen2.5vl:7b",
+        "px": 1600
+      }
+    },
+    "TestCerts": {
+      "doc_type": "test_cert",
+      "label": "Test Certificates",
+      "split_pages": false,
+      "max_pages": 30,
+      "tc_reader": {
+        "model": "qwen3-vl:8b-instruct",
+        "fewshot_dir": "",
+        "px": 1600,
+        "chem_px": 2000,
+        "max_pages": 30
+      }
+    }
+  },
+  "dashboard": {
+    "bind": "0.0.0.0",
+    "port": 8090,
+    "session_hours": 12,
+    "password_hash": "<redacted>",
+    "services": [
+      "mps-ocr-worker",
+      "mps-ocr-collector"
+    ]
+  },
+  "px": 1600,
+  "_note_px_ctx": "review F13 (28 Oct): the generic extractor renders at px 1600 (was dpi 200) and uses num_ctx 49152 like the readers, so Ollama never reloads a model for a different context"
+}

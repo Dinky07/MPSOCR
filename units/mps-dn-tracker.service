@@ -1,0 +1,9 @@
+[Unit]
+OnFailure=mps-alert@%n.service
+Description=MPS delivery note scan tracker (reports/Delivery Note Scan Tracker.xlsx)
+[Service]
+Type=oneshot
+User=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/dn_tracker.py
+TimeoutStartSec=30min

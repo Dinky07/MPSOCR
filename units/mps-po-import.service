@@ -1,0 +1,9 @@
+[Unit]
+OnFailure=mps-alert@%n.service
+Description=MPS purchase orders: import the rows marked Use as Checked
+[Service]
+Type=oneshot
+User=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/po_daily.py import --apply
+TimeoutStartSec=1h
