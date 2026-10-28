@@ -975,11 +975,10 @@ class Worker:
                 return "no items read"
             if fields.get("family") in (None, "", "Other"):
                 return "family Other: not pipe, flanges or fittings"
-            # Dino 25 Oct: certs that need checking wait in hold; the rest may go to SharePoint. A heat corrected from the
-            # old site does not need checking (the old site is right)
-            need = [x for x in flags if not re.match(r"check: heat read as .+: .+ from the old site$", str(x))]
-            if need:
-                return f"review checks ({len(need)})"
+            if "no_heats" in flags and not fields.get("heat_count"):
+                return "no heats read"
+            # Dino 28 Oct (review F14): only those structural problems hold a cert; every other check stays in the
+            # Check column and the cert may be uploaded (25 Oct rule "any check holds" put 82 % of certs on hold)
             return None
         rules = (self.types.get(dest) or {}).get("hold_unless")
         if not rules:
