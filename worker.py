@@ -1065,7 +1065,9 @@ class Worker:
         # a workshop sheet read earlier in another queue (e.g. Purchase Orders, as "not an order") may be read again here
         rerouted = bool(row) and row[1] != folder and "rerouted_from" in (
             read_json_file(self.root / "in" / folder / "_meta" / (src.name + ".json")) or {})
-        if row and row[0] == "ok" and not rerouted and not (doc_type == "ws" and row[1] != folder and "WorkshopSheets/" not in str(row[2])):
+        reread = bool(row) and "reread_of" in (
+            read_json_file(self.root / "in" / folder / "_meta" / (src.name + ".json")) or {})
+        if row and row[0] == "ok" and not rerouted and not reread and not (doc_type == "ws" and row[1] != folder and "WorkshopSheets/" not in str(row[2])):
             log.info("duplicate, skipping: %s", src.name)
             move(src, self.root / "done" / folder / "duplicates")
             return

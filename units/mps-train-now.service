@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS one-off training tonight (Dino 28 Oct): waits for the queues, PO/WS/JT/TC quick training, then resumes feeds and starts the hold re-read
+[Service]
+Type=simple
+User=dinoc
+Environment=MPS_OCR_CONFIG=/srv/ocr/pipeline/config.json
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/bin/bash /srv/ocr/pipeline/train_now.sh

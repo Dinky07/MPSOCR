@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS hold re-read (Dino 28 Oct): feeds hold orders back to the reader at night, a few at a time
+[Service]
+Type=oneshot
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/reread_hold.py tick --batch 30

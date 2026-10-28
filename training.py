@@ -104,7 +104,8 @@ def examples(cfg):
             out.append({"json": str(js), "pdf": str(pdf) if pdf.is_file() else None, "doc_type": sc.get("doc_type"),
                         "folder": sc.get("folder"), "verified": f, "read": sc.get("fields_read") or f,
                         "edits": sum(len(e.get("changes") or []) for e in (sc.get("edits") or [])),
-                        "hash": h, "test": is_test(h), "synced": base.name == "synced",
+                        "hash": h, "test": is_test(h) and not str(sc.get("checked_how") or "").startswith("auto"),
+                        "checked_how": sc.get("checked_how"), "synced": base.name == "synced",   # auto-checked orders never test
                         "form": f.get("form") or "", "supplier": f.get("supplier") or f.get("supplier_name"),
                         # what the worker knows about the scan: the reader's date check needs it (scan-date year anchor)
                         "source": {"source_folder": sc.get("source_folder"), "source_modified": sc.get("source_modified"),
@@ -379,6 +380,7 @@ def install(cfg, job, new_active, report):
 
 
 def test_set(t, pos):
+    """The test orders: checked by a person (auto-checked orders never test: see examples()), lowest hashes first."""
     tests = sorted([e for e in pos if e["test"]], key=lambda e: e["hash"])
     return tests[: int(t["test_max"])]
 

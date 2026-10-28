@@ -1,0 +1,7 @@
+[Unit]
+Description=MPS hold re-read every 15 min (night window 19:00-02:15 is checked by the script)
+[Timer]
+OnCalendar=*:0/15
+Persistent=false
+[Install]
+WantedBy=timers.target
