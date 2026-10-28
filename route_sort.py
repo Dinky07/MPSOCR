@@ -62,7 +62,9 @@ DEFAULT = {
          "why": "sales quotation by MPS / Kusasa: Quotes library"},
         {"name": "Saheti", "action": "other_documents", "category": "Saheti", "any": [r"\bSAHETI\b"]},
         {"name": "Alenti", "action": "other_documents", "category": "Alenti", "any": [r"\bALENTI\b"]},
-        {"name": "SARS", "action": "other_documents", "category": "SARS", "any": [r"SOUTH\s+AFRICAN\s+REVENUE\s+SERVICE", r"\bSARS\b", r"\beFILING\b"]},
+        # 28 Oct review sheet: half the "SARS" matches only mentioned SARS (MPS orders, insurance letters): from SARS = in the letterhead
+        {"name": "SARS", "action": "other_documents", "category": "SARS", "head": r"SOUTH\s+AFRICAN\s+REVENUE|\bSARS\b",
+         "any": [r"SOUTH\s+AFRICAN\s+REVENUE\s+SERVICE", r"\bSARS\b"]},
         {"name": "COD", "action": "tag", "field": "cod", "orders_only": True, "any": [r"\bC\s?[.,]\s?[O0]\s?[.,]\s?D\b", r"CASH\s+ON\s+DELIVERY"],
          "vision": "Is there a C.O.D stamp (cash on delivery), or the words C.O.D / CASH ON DELIVERY stamped or written, on this order form? Answer only yes or no."},
         {"name": "Cancelled", "action": "tag", "field": "cancelled", "orders_only": True, "any": [r"\bCANCELL?ED\b"],

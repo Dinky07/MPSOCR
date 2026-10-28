@@ -117,10 +117,10 @@
    "name": "SARS",
    "action": "other_documents",
    "category": "SARS",
+   "head": "SOUTH\\s+AFRICAN\\s+REVENUE|\\bSARS\\b",
    "any": [
     "SOUTH\\s+AFRICAN\\s+REVENUE\\s+SERVICE",
-    "\\bSARS\\b",
-    "\\beFILING\\b"
+    "\\bSARS\\b"
    ]
   },
   {
