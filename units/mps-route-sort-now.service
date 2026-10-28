@@ -1,0 +1,12 @@
+[Unit]
+Description=MPS routing rules, one-off run of the removals and sales quotes only (route_sort.py --apply --only remove,quotes)
+OnFailure=mps-alert@%n.service
+
+[Service]
+Type=simple
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/usr/bin/python3 -u /srv/ocr/pipeline/route_sort.py --apply --only remove,quotes --no-synced
+Nice=10
+RuntimeMaxSec=4h
