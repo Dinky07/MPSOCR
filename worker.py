@@ -54,6 +54,10 @@ try:
 except ImportError:                       # pragma: no cover
     ws_reader = None
 try:
+    import rn_reader                      # release notes (28 Oct): split at each release note, read it with qwen3-vl
+except ImportError:                       # pragma: no cover
+    rn_reader = None
+try:
     import presort                        # pre-sort of the purchase-order queue, SHADOW (27 Oct): verdict recorded only
 except Exception:                         # pragma: no cover
     presort = None
@@ -1080,6 +1084,14 @@ class Worker:
                     # one scanned batch -> one document per delivery note (CPU only), published by process_delivery_notes
                     self.process_delivery_notes(folder, src, work, digest, meta, tcfg, outputs)
                     parts = []
+                elif doc_type == "release_note":
+                    # one scanned batch -> one document per release note + its supporting pages (28 Oct)
+                    while self.paused() and not _stop:
+                        time.sleep(5)
+                    if _stop:
+                        raise OllamaDown("shutdown")
+                    self.process_release_notes(folder, src, work, digest, meta, tcfg, outputs)
+                    parts = []
                 elif doc_type in ("ws", "test_cert"):
                     parts = []
                 else:
@@ -1392,6 +1404,60 @@ class Worker:
                 self.db.execute("INSERT INTO extractions VALUES(?,?,?,?,?)",
                                 (now_iso(), folder, src.name, "dn_cpu", json.dumps(d["flags"])))
                 log.info("%s %s p%s -> %s%s flags=%s", folder, src.name, ",".join(map(str, d["pages"])), pdf_dst.name,
+                         f" [held: {d['hold']}]" if held else "", d["flags"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def process_release_notes(self, folder, src, work, digest, meta, tcfg, outs):
+        """Split the batch at each release note (rn_reader), read the release-note pages with the vision model and
+        publish one PDF + sidecar per release note to out/<folder>/; pages before the first release note go to hold."""
+        if not rn_reader:
+            raise RuntimeError("rn_reader.py is missing beside worker.py")
+        t0 = time.time()
+        c = dict(tcfg.get("rn_reader") or {})
+        c.setdefault("ollama_url", self.cfg["ollama_url"])
+        c.setdefault("num_ctx", self.cfg.get("num_ctx", 49152))
+        c.setdefault("keep_alive", self.cfg.get("keep_alive", "15m"))
+        name = meta.get("original_name") or src.name
+        prep, docs, tmp = rn_reader.read(work, c, log, name=name)
+        try:
+            for d in docs:
+                held = bool(d["hold"])
+                out_dir = self.root / "out" / folder / ("hold" if held else "")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                pdf_dst = unique_path(out_dir, safe_name(d["stem"], 120), ".pdf")
+                outs.append(f"hold/{pdf_dst.name}" if held else pdf_dst.name)
+                shutil.copy2(d["pdf"], pdf_dst.with_name(pdf_dst.name + ".tmp"))
+                os.replace(pdf_dst.with_name(pdf_dst.name + ".tmp"), pdf_dst)
+                f = d["fields"]
+                sidecar = {
+                    "schema_version": 1,
+                    "doc_id": f"{digest[:16]}-p{d['pages'][0]:03d}",
+                    "doc_type": "release_note",
+                    "folder": folder,
+                    "file": pdf_dst.name,
+                    "source_file": name,
+                    **({"source_folder": meta["source_folder"]} if meta.get("source_folder") else {}),
+                    "source_sha256": digest,
+                    "source_page": d["pages"][0],
+                    "source_pages": d["pages"],
+                    "blank_pages_dropped": d["dropped"],
+                    "pages_read": len(d["pages"]),
+                    "processed_at": now_iso(),
+                    "seconds": round(time.time() - t0, 1),
+                    "model": c.get("model", rn_reader.DEFAULTS["model"]),
+                    "extractor": "rn",
+                    "reader": "rn_reader (text layer split + vision model per release-note page)",
+                    "page_prep": prep,
+                    **({"hold_reason": d["hold"]} if held else {}),
+                    "needs_review": bool(d["flags"]),
+                    "flags": d["flags"],
+                    "fields": f,
+                }
+                atomic_write_json(pdf_dst.with_suffix(".json"), sidecar)
+                self.db.execute("INSERT INTO extractions VALUES(?,?,?,?,?)",
+                                (now_iso(), folder, src.name, "rn", json.dumps(d["flags"])))
+                log.info("%s %s p%s -> %s%s flags=%s", folder, src.name, f.get("source_pages"), pdf_dst.name,
                          f" [held: {d['hold']}]" if held else "", d["flags"])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)

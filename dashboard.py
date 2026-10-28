@@ -37,6 +37,10 @@ try:
     import tc_reader                # test certificates: summaries after an edit
 except Exception:                   # pragma: no cover
     tc_reader = None
+try:
+    import rn_reader                # release notes (28 Oct): line text and totals after an edit
+except Exception:                   # pragma: no cover
+    rn_reader = None
 
 CONFIG_PATH = Path(os.environ.get("MPS_OCR_CONFIG", "/srv/ocr/pipeline/config.json"))
 SESSIONS = {}                 # token -> {"exp": ts, "csrf": str}
@@ -862,6 +866,9 @@ EDITABLE = {
     "ws": ("date", "sheet_no", "sheet_of", "project", "corrosion_int", "corrosion_ext", "destination", "job_number", "spec",
            "customer_dwg_no", "rev", "mps_dwg_no", "batch_no", "mto", "drawn_by", "status", "end_detail", "notes",
            "stamped", "ifc_signed", "stamp_date"),
+    "release_note": ("release_number", "customer", "project_description", "project_number", "job_number", "qcp_number",
+                     "inspection_date", "signed_off", "inspector", "inspector_company", "signed_date", "mps_name",
+                     "released_qty", "despatch_to", "ncr_no", "inspections_text"),
     "test_cert": ("cert_no", "cert_type", "date", "mill", "supplier", "customer", "purchaser", "mps_po", "ronin_po", "contract",
                   "family", "standard", "grade", "material_no"),
 }
@@ -870,13 +877,14 @@ EDIT_LINES = {"po": ("quantity", "description", "unit_price", "price_unit"),
               "jt": ("item_no", "quantity", "unit", "description"),
               "delivery_note": ("quantity", "description"),
               "ws": ("item_no", "mark", "qty", "size", "dwg_no", "dims_text"),
+              "release_note": ("qty", "item_ref", "mark_no", "description"),
               "test_cert": ("family", "product", "description", "size_text", "size_nb", "schedule", "class", "grade", "ends",
                             "length_m", "qty", "unit", "heat_no")}
-NUMERIC = {"amount", "subtotal", "vat", "total", "unit_price", "qty", "sheet_no", "sheet_of", "size_nb", "length_m"}
+NUMERIC = {"amount", "subtotal", "vat", "total", "unit_price", "qty", "sheet_no", "sheet_of", "size_nb", "length_m", "released_qty"}
 
 
 def _edit_value(k, v, doc_type):
-    if k in ("cancelled", "amended", "stamped", "ifc_signed"):
+    if k in ("cancelled", "amended", "stamped", "ifc_signed", "signed_off"):
         return str(v).strip().lower() in ("yes", "true", "1", "on")
     v = "" if v is None else str(v).strip()
     if v == "":
@@ -886,7 +894,7 @@ def _edit_value(k, v, doc_type):
         if n is None:
             raise ValueError(f"{k}: '{v}' is not a number")
         return int(n) if k in ("quantity", "qty", "sheet_no", "sheet_of", "size_nb") and float(n).is_integer() else n
-    if k in ("date", "invoice_date", "stamp_date"):
+    if k in ("date", "invoice_date", "stamp_date", "inspection_date", "signed_date"):
         try:
             return date.fromisoformat(v[:10]).isoformat()
         except ValueError:
@@ -928,6 +936,10 @@ def _recompute(doc_type, f):
         f["items"] = items
         if ws_reader:
             ws_reader.recompute(f)
+    elif doc_type == "release_note":
+        f["items"] = items
+        if rn_reader:
+            rn_reader.recompute(f)
     elif doc_type == "test_cert":
         f["items"] = items
         if tc_reader and hasattr(tc_reader, "recompute"):
@@ -1758,6 +1770,20 @@ const $=s=>document.querySelector(s);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let busy=false,last=null;
 function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("show");clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("show"),2600)}
+// PC sync v34 (28 Oct): "running" + "current" while it works, "recent" = the last files synced / failed
+function syncNow(sy,stale){
+  const c=sy.current,rec=Array.isArray(sy.recent)?sy.recent:[];let h="";
+  if(sy.running&&c&&!stale){const pct=c.of?Math.round(100*(c.n-1)/c.of):0;
+    h+=`<div class="small" style="margin-top:6px"><b>Moving to SharePoint now</b> · ${c.n} of ${c.of}</div>
+      <div class="small" title="${esc(c.file)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.type)} · ${esc(c.file)}</div>
+      <div class="bar"><i style="width:${pct}%"></i></div>`}
+  if(rec.length){
+    h+=`<details style="margin-top:6px" ${window.__syncOpen?"open":""} ontoggle="window.__syncOpen=this.open"><summary class="small">Last ${rec.length} file${rec.length>1?"s":""}</summary>`+
+      rec.map(r=>{const t=r.at?new Date(r.at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}):"";
+        const nm=r.url?`<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.file)}</a>`:esc(r.file);
+        return `<div class="small" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc((r.file||"")+(r.note?" - "+r.note:""))}">
+          <span class="muted">${esc(t)}</span> ${r.result=="failed"?'<span style="color:var(--bad)">failed</span>':"✓"} ${esc(r.type)} · ${nm}</div>`}).join("")+`</details>`}
+  return h}
 function ago(s){if(s==null)return"never";if(s<60)return s+"s ago";if(s<3600)return Math.round(s/60)+" min ago";if(s<86400)return Math.round(s/3600)+" h ago";return Math.round(s/86400)+" d ago"}
 async function act(body,msg){
   busy=true;try{const r=await fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF":CSRF},body:JSON.stringify(body)});
@@ -1801,6 +1827,7 @@ function render(d){
     <div class="big">${!d.sync_all_on?"switched off":stale?"no heartbeat":sy.result=="idle"?"waiting for Sync now":esc(sy.result||"?")}</div>
     <div class="small muted">Last check ${ago(sy.age)} · every ${every} min${sy.synced?" · synced "+sy.synced:""}${sy.failed?" · "+sy.failed+" failed":""}</div>
     ${sy.message?`<div class="err">${esc(sy.message)}</div>`:""}
+    ${syncNow(sy,stale)}
     <div class="label">${sw("sync_off",d.sync_all_on,"PC sync")}<span class="small">Sync ${d.sync_all_on?"on":"off"}</span></div></div>`;
   const so=d.storage||{},ra=so.raid,bk=so.backup,arrs=so.arrays||(ra?[ra]:[]),vols=so.volumes||[];
   const raidBad=arrs.some(a=>!a.healthy),raidSync=arrs.find(a=>a.sync);
@@ -1916,6 +1943,9 @@ const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_n
   pop:[["Date","date"],["Amount","amount",1],["Statement ref","statement_ref"],["Account name","account_name",0,1],["Creditor code","creditor_code"],
     ["Paid from","from_account_name"],["Original folder","_folder",0,0,"wrap"],["Checked","checked",0,0,"tick"]],
   jt:[["JT","jt_number",0,1],["Job","job_number"],["Date","date"],["From","from"],["Writer","written_by"]],
+  rn:[["Release number","release_number",0,1],["Customer","customer",0,0,"wrap"],["Project","project_description",0,0,"wrap"],
+    ["Project number","project_number"],["MPS job","job_number"],["QCP number","qcp_number"],["Inspection date","inspection_date"],
+    ["Signed off","signed_off_label"],["Inspector","inspector"],["Supporting pages","supporting_text",0,0,"wrap"],["Held because","_hold",0,0,"wrap"]],
   dn:[["Delivery note","dn_number",0,1],["Date","date"],["Customer","customer",0,0,"wrap"],["Account","customer_account"],
     ["Customer order","customer_order"],["Job","job_number"],["Pages","pages"],["Extra pages","extra_pages",0,0,"wrap"],["Held because","_hold",0,0,"wrap"]],
   ws:[["MPS DWG","mps_dwg_no",0,1],["Job","job_number"],["Sheet","sheet"],["Date","date"],["Project","project",0,0,"wrap"],["Corrosion int","corrosion_int"],
@@ -1923,7 +1953,7 @@ const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_n
   test_cert:[["Cert no","cert_no",0,1],["Family","family"],["Date","date"],["Mill","mill",0,0,"wrap"],["MPS PO","mps_po"],["Ronin PO","ronin_po"],
     ["Type","cert_type"],["Heats","heats_text",0,0,"wrap"],["Checked","checked",0,0,"tick"]]};
 const ALIAS={order_number:"po_number",supplier:"supplier_name"};      // older sidecars (generic reader)
-const DT={SupplierInvoices:"supplier_invoice",SupplierInvoicesArchive:"supplier_invoice",PurchaseOrders:"po",PolymerOrders:"pl",ProofOfPayments:"pop",JobTransfers:"jt",DeliveryNotes:"dn",WorkshopSheets:"ws",TestCerts:"test_cert"};
+const DT={ReleaseNotes:"rn",SupplierInvoices:"supplier_invoice",SupplierInvoicesArchive:"supplier_invoice",PurchaseOrders:"po",PolymerOrders:"pl",ProofOfPayments:"pop",JobTransfers:"jt",DeliveryNotes:"dn",WorkshopSheets:"ws",TestCerts:"test_cert"};
 const money=v=>v==null||v===""?"":(+v).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2});
 function checks(x){
   const f=x.fields||{},c=[];
@@ -1979,6 +2009,13 @@ const HEAD={
     ["Customer DWG No","customer_dwg_no"],["Rev","rev",1],["Batch No","batch_no"],["MTO","mto",1],["Drawn by","drawn_by",1],
     ["QA stamped","stamped",0,0,"yn"],["Issued for construction signed","ifc_signed",0,0,"yn"],["Stamp date","stamp_date"],
     ["Stamp date as written","stamp_date_as_written",1,1],["Status","status",1],["End detail","end_detail",1],["Layout","layout",1,1],["Legibility","legibility",1,1],["Notes","notes",0,0,"wide"]]},
+  release_note:{title:"Release note",rows:[["Release number","release_number"],["As read","release_number_read",1,1],["Customer","customer"],
+    ["Project","project_description"],["Project number","project_number"],["MPS job (MPS project number)","job_number"],["QCP number","qcp_number"],
+    ["Inspection date","inspection_date"],["Inspections","inspections_text",0,0,"wide"],["Other","other_text",1,1],
+    ["Signed off by the inspector","signed_off",0,0,"yn"],["Inspector","inspector"],["Inspector company","inspector_company"],
+    ["Signed date","signed_date"],["MPS QC","mps_name"],["Sign-off as read","signoff_text",1,1],["Released qty","released_qty"],["Despatch to","despatch_to",1],["Items read from","items_from",1,1],["Inspections read from","inspections_from",1,1],
+    ["NCR no","ncr_no"],["Pages","pages",1,1],["Scan pages","source_pages",1,1],["Supporting pages","supporting_text",1,1],
+    ["Blank pages left out","blank_pages_dropped",1,1],["Legibility","legibility",1,1]]},
   test_cert:{title:"Test certificate",rows:[["Cert no","cert_no"],["Cert type","cert_type"],["Date","date"],["Date as written","date_as_written",1,1],
     ["Mill","mill"],["Supplier (trader)","supplier"],["Customer","customer"],["Purchaser","purchaser"],["MPS PO","mps_po"],["Ronin PO","ronin_po"],
     ["Contract / invoice","contract"],["Family","family"],["Standard","standard"],["Grade","grade"],["Material no","material_no",1],
@@ -1987,13 +2024,15 @@ const HEAD={
   other:{title:"Not a delivery note",rows:[["Looks like","doc_label",1,1],["Pages","pages",1,1],["Scan pages","source_pages",1,1],["Page types","page_kinds",1,1],
     ["Release number","release_number",1,1]]}};
 const HOLD={not_in_sage:"Not in Sage yet: released automatically after the next Sage read",no_sage_copy:"No Sage copy on the share yet (sage_invoices.csv): released automatically when it arrives",
-  not_a_delivery_note:"Not a delivery note (no barcode on the first page)"};
-const MONEYF=new Set(["amount","subtotal","vat","total","unit_price","order_value","total_excl"]),DATEF=new Set(["date","invoice_date","stamp_date"]);
+  not_a_delivery_note:"Not a delivery note (no barcode on the first page)",
+  no_release_note:"Pages scanned before the first release note: not part of one"};
+const MONEYF=new Set(["amount","subtotal","vat","total","unit_price","order_value","total_excl"]),DATEF=new Set(["date","invoice_date","stamp_date","inspection_date","signed_date"]);
 const LINECOLS={po:[["Qty","quantity",1],["Description","description"],["Unit price","unit_price",1],["Unit","price_unit",0,0,"unit"],["Amount","amount",1,1]],
   supplier_invoice:[["Code","item_code"],["Description","description"],["Qty","quantity",1],["Unit price","unit_price",1],["Amount","amount",1]],
   jt:[["#","item_no"],["Qty","quantity"],["Unit","unit"],["Description","description"]],
   delivery_note:[["Qty","quantity",1],["Description","description"]],
   ws:[["Item","item_no"],["Mark","mark"],["Qty","qty",1],["Size","size"],["DWG No (customer)","dwg_no"],["Dimensions (A=227 R=533)","dims_text"]],
+  release_note:[["Qty","qty",1],["Item ref","item_ref"],["Mark no","mark_no"],["Description","description"]],
   test_cert:[["Family","family"],["Product","product"],["Description","description"],["Size as printed","size_text"],["NB","size_nb",1],
     ["Sch / WT","schedule"],["Class","class"],["Grade","grade"],["Ends","ends"],["Length m","length_m",1],["Qty","qty",1],["Unit","unit"],["Heat no","heat_no"]]};
 let editing=null,WRITERS=[],UNITS=[["each","ea"],["kg","PKG"],["litre","/L"],["length","PLEN"],["metre","PM"],["lot","lot"]];
