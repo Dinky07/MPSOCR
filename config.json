@@ -144,7 +144,7 @@
     "bind": "0.0.0.0",
     "port": 8090,
     "session_hours": 12,
-    "password_hash": "<redacted>",
+    "password_hash": "pbkdf2_sha256$260000$eb44dd848a7720b3e994aef380f3148e$1cfb2ccd3009f70db327f73c578ec38b13efe53a4339a875b086654bc9f15270",
     "services": [
       "mps-ocr-worker",
       "mps-ocr-collector"
