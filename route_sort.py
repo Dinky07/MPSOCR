@@ -61,7 +61,8 @@ DEFAULT = {
          "confirm": "Is this a quotation ISSUED BY Mining Pressure Systems or Kusasa Pressure Systems (their letterhead at the top, quoting prices to a customer)? Answer only yes or no.",
          "why": "sales quotation by MPS / Kusasa: Quotes library"},
         {"name": "Saheti", "action": "other_documents", "category": "Saheti", "any": [r"\bSAHETI\b"]},
-        {"name": "Alenti", "action": "other_documents", "category": "Alenti", "any": [r"\bALENTI\b"]},
+        # Dino 28 Oct 17:09: anything with Rand Airport in the address is Alenti
+        {"name": "Alenti", "action": "other_documents", "category": "Alenti", "any": [r"\bALENTI\b", r"\bRAND\s+AIRPORT\b"]},
         # 28 Oct review sheet: half the "SARS" matches only mentioned SARS (MPS orders, insurance letters): from SARS = in the letterhead
         {"name": "SARS", "action": "other_documents", "category": "SARS", "head": r"SOUTH\s+AFRICAN\s+REVENUE|\bSARS\b",
          "any": [r"SOUTH\s+AFRICAN\s+REVENUE\s+SERVICE", r"\bSARS\b"]},
@@ -263,6 +264,8 @@ def main():
     ap.add_argument("--no-synced", action="store_true")
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--vision", action="store_true", help="dry run: also ask the model the C.O.D question (slow)")
+    ap.add_argument("--rule", default="", help="only these rules (names, comma separated)")
+    ap.add_argument("--od-all", action="store_true", help="Other Documents rules also on documents read before od_new_since")
     a = ap.parse_args()
     c = config()
     only = set(x for x in a.only.split(",") if x)
@@ -304,6 +307,8 @@ def main():
         for r in c["rules"]:
             if only and r["action"] not in only:
                 continue
+            if a.rule and r["name"] not in a.rule.split(","):
+                continue
             r["_t"] = t
             if r["action"] == "tag":
                 if not is_order or f.get(r["field"]) is True:
@@ -313,7 +318,7 @@ def main():
             else:
                 if is_order or uploaded or f.get("checked"):
                     continue
-                if r["action"] == "other_documents" and str(sc.get("processed_at") or "") < c.get("od_new_since", ""):
+                if r["action"] == "other_documents" and not a.od_all and str(sc.get("processed_at") or "") < c.get("od_new_since", ""):
                     continue                                    # the backlog goes through od_sort's review sheet
             m = matches(r, text or "", head, fname, own)
             if not m and r.get("vision") and (a.apply or a.vision):

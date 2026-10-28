@@ -110,7 +110,8 @@
    "action": "other_documents",
    "category": "Alenti",
    "any": [
-    "\\bALENTI\\b"
+    "\\bALENTI\\b",
+    "\\bRAND\\s+AIRPORT\\b"
    ]
   },
   {
