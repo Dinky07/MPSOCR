@@ -98,6 +98,25 @@
    "why": "sales quotation by MPS / Kusasa: Quotes library"
   },
   {
+   "name": "Letter",
+   "action": "other_documents",
+   "category": "Letter",
+   "all": [
+    "MINING\\s+PRESSURE\\s+SYSTEMS\\s*\\(PTY\\)\\s*LIMITED",
+    "(?m)^\\W*LETTER\\W*$",
+    "(?m)^\\W*(RE|OUR\\s+REF\\.?|FROM)\\s*:"
+   ]
+  },
+  {
+   "name": "Memo",
+   "action": "other_documents",
+   "category": "Memo",
+   "all": [
+    "MINING\\s+PRESSURE\\s+SYSTEMS\\s*\\(PTY\\)\\s*LIMITED",
+    "(?m)^\\W*MEMO(RANDUM)?\\W*$"
+   ]
+  },
+  {
    "name": "Saheti",
    "action": "other_documents",
    "category": "Saheti",

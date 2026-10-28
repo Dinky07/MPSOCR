@@ -60,6 +60,11 @@ DEFAULT = {
          "head_or": r"KUSASA\s+PRESSURE|MINING\s+PRESSURE\s+SYSTEMS", "all_or": [r"QUOTATION|QUOTE\s*#|QUOTE\s+NO"],
          "confirm": "Is this a quotation ISSUED BY Mining Pressure Systems or Kusasa Pressure Systems (their letterhead at the top, quoting prices to a customer)? Answer only yes or no.",
          "why": "sales quotation by MPS / Kusasa: Quotes library"},
+        # Dino 28 Oct 17:12: MPS's own letterhead titled LETTER or MEMO -> Other Documents, labelled Letter / Memo
+        {"name": "Letter", "action": "other_documents", "category": "Letter",
+         "all": [r"MINING\s+PRESSURE\s+SYSTEMS\s*\(PTY\)\s*LIMITED", r"(?m)^\W*LETTER\W*$", r"(?m)^\W*(RE|OUR\s+REF\.?|FROM)\s*:"]},
+        {"name": "Memo", "action": "other_documents", "category": "Memo",
+         "all": [r"MINING\s+PRESSURE\s+SYSTEMS\s*\(PTY\)\s*LIMITED", r"(?m)^\W*MEMO(RANDUM)?\W*$"]},
         {"name": "Saheti", "action": "other_documents", "category": "Saheti", "any": [r"\bSAHETI\b"]},
         # Dino 28 Oct 17:09: anything with Rand Airport in the address is Alenti
         {"name": "Alenti", "action": "other_documents", "category": "Alenti", "any": [r"\bALENTI\b", r"\bRAND\s+AIRPORT\b"]},
