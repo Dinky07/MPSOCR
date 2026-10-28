@@ -94,6 +94,8 @@ def examples(cfg):
             f = sc.get("fields") or {}
             if not f.get("checked"):
                 continue
+            if str(sc.get("checked_how") or "").startswith("auto: reader only"):
+                continue                     # marked Checked to clear the queue (28 Oct), never verified: not training data
             h = f.get("content_hash") or sc.get("source_sha256") or js.name
             if h in seen:
                 continue
