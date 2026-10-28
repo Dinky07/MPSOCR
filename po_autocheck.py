@@ -32,6 +32,11 @@ import dashboard as D                              # noqa: E402  _recompute()
 
 ROOT = Path("/srv/ocr/scans/pipeline")
 DATE_FLAG = re.compile(r"\bdate\b|scan[- ]date|\byear\b", re.I)
+# Dino 28 Oct 11:20: an MPS order made out to Polymer is a clear MPS order; differences in Att of / Signed by do not
+# block (the spreadsheet's values are written) - only Supplier, Job or line count do
+POLY_NOTE = re.compile(r"MPS order A\d{5} made out to Polymer .*taken as an MPS order", re.I)
+ok_flag = lambda x: bool(DATE_FLAG.search(str(x)) or POLY_NOTE.search(str(x))) or x == "missing_date"
+BLOCKING_DIFF = lambda d: d in ("Supplier", "Job") or d.startswith("lines ")
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--apply", action="store_true")
@@ -73,7 +78,7 @@ for t in ("PurchaseOrders", "PolymerOrders"):
             why = "no supplier"
         elif not [i for i in (f.get("items") or []) if isinstance(i, dict) and i.get("description")]:
             why = "no lines"
-        blocking = [x for x in flags if not DATE_FLAG.search(x) and x not in ("missing_date",)]
+        blocking = [x for x in flags if not ok_flag(x)]
         if not why and blocking:
             why = "review checks"
             for x in blocking:
@@ -81,8 +86,8 @@ for t in ("PurchaseOrders", "PolymerOrders"):
         key = PD.order_key(f, sc.get("source_file") or sc.get("file"))
         reg = PD.pick(regs.get(key) or [], f) if key else None
         status, diffs, hdr, lines = PD.compare(f, reg)
-        if not why and reg is not None and status == "check" and [d for d in diffs if d != "Date" and not d.startswith("line ")]:
-            why = "spreadsheet disagrees: " + ", ".join(d for d in diffs if d != "Date" and not d.startswith("line "))
+        if not why and reg is not None and status == "check" and [d for d in diffs if BLOCKING_DIFF(d)]:
+            why = "spreadsheet disagrees: " + ", ".join(d for d in diffs if BLOCKING_DIFF(d))
         if not why and reg is None and a.no_reader_only:
             why = "no spreadsheet row (--no-reader-only)"
         how = None if why else ("auto: spreadsheet" if reg is not None else "auto: reader only")
@@ -122,9 +127,9 @@ for t in ("PurchaseOrders", "PolymerOrders"):
                         f["items"] = new_items
                 D._recompute("po", f)
                 f["checked"] = True
-                f["checks"] = [c for c in (f.get("checks") or []) if not DATE_FLAG.search(str(c))]
+                f["checks"] = [c for c in (f.get("checks") or []) if not ok_flag(c)]
                 f["review"] = "; ".join(f["checks"]) or None
-                sc["flags"] = [x for x in (sc.get("flags") or []) if not (DATE_FLAG.search(str(x)) or x == "missing_date")]
+                sc["flags"] = [x for x in (sc.get("flags") or []) if not ok_flag(x)]
                 sc["needs_review"] = bool(sc["flags"])
                 sc["checked_at"], sc["checked_how"] = stamp, how
                 sc.setdefault("edits", []).append({"at": stamp, "by": f"po_autocheck ({how})", "changes": changes})
