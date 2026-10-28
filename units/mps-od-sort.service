@@ -3,10 +3,10 @@ Description=MPS Other Documents: OCR + rules (Saheti / Alenti / SARS) + summarie
 OnFailure=mps-alert@%n.service
 
 [Service]
-Type=oneshot
+Type=simple
 User=dinoc
 Group=dinoc
 WorkingDirectory=/srv/ocr/pipeline
 ExecStart=/usr/bin/python3 -u /srv/ocr/pipeline/od_sort.py scan
 Nice=10
-TimeoutStartSec=6h
+RuntimeMaxSec=6h

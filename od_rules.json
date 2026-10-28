@@ -1,0 +1,20 @@
+[
+ {
+  "name": "Saheti",
+  "category": "Saheti",
+  "pattern": "\\bSAHETI\\b",
+  "note": "anything to do with Saheti, the school"
+ },
+ {
+  "name": "Alenti",
+  "category": "Alenti",
+  "pattern": "\\bALENTI\\b",
+  "note": "anything related to Alenti"
+ },
+ {
+  "name": "SARS",
+  "category": "SARS",
+  "pattern": "SOUTH\\s+AFRICAN\\s+REVENUE\\s+SERVICE|\\bSARS\\b|\\beFILING\\b",
+  "note": "anything from SARS (South African Revenue Service)"
+ }
+]
