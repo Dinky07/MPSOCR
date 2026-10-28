@@ -3,6 +3,8 @@ Description=MPS runner: executes scripts dropped in the pipeline share's _src/ru
 After=network-online.target remote-fs.target
 
 [Service]
+User=dinoc
+Group=dinoc
 Type=simple
 ExecStart=/usr/local/sbin/mps-runner.sh
 Restart=no

@@ -1,0 +1,11 @@
+#!/bin/bash
+# mps-unit-install <unit file>...: installs mps-* systemd unit files (from the pipeline share or repo) and reloads systemd
+set -eu
+for f in "$@"; do
+  b=$(basename "$f")
+  case "$b" in mps-*.service|mps-*.timer|mps-*.conf) ;; *) echo "refused: $b is not an mps-* unit"; exit 1;; esac
+  case "$b" in *.conf) d=/etc/systemd/system/$(basename "$(dirname "$f")"); mkdir -p "$d"; install -m 0644 -o root -g root "$f" "$d/$b";;
+             *) install -m 0644 -o root -g root "$f" "/etc/systemd/system/$b";; esac
+  echo "installed $b"
+done
+systemctl daemon-reload
