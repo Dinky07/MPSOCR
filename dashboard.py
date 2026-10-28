@@ -866,6 +866,7 @@ EDITABLE = {
     "ws": ("date", "sheet_no", "sheet_of", "project", "corrosion_int", "corrosion_ext", "destination", "job_number", "spec",
            "customer_dwg_no", "rev", "mps_dwg_no", "batch_no", "mto", "drawn_by", "status", "end_detail", "notes",
            "stamped", "ifc_signed", "stamp_date"),
+    "other_doc": ("summary", "od_doc_type", "od_from", "date", "order_number", "job_number", "od_category"),
     "release_note": ("release_number", "customer", "project_description", "project_number", "job_number", "qcp_number",
                      "inspection_date", "signed_off", "inspector", "inspector_company", "signed_date", "mps_name",
                      "released_qty", "despatch_to", "ncr_no", "inspections_text"),
@@ -1943,6 +1944,8 @@ const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_n
   pop:[["Date","date"],["Amount","amount",1],["Statement ref","statement_ref"],["Account name","account_name",0,1],["Creditor code","creditor_code"],
     ["Paid from","from_account_name"],["Original folder","_folder",0,0,"wrap"],["Checked","checked",0,0,"tick"]],
   jt:[["JT","jt_number",0,1],["Job","job_number"],["Date","date"],["From","from"],["Writer","written_by"]],
+  od:[["Category","od_category"],["Document type","od_doc_type",0,0,"wrap"],["From","od_from",0,0,"wrap"],["Date","date"],
+    ["Summary","summary",0,0,"wrap"],["Moved from","moved_from"]],
   rn:[["Release number","release_number",0,1],["Customer","customer",0,0,"wrap"],["Project","project_description",0,0,"wrap"],
     ["Project number","project_number"],["MPS job","job_number"],["QCP number","qcp_number"],["Inspection date","inspection_date"],
     ["Signed off","signed_off_label"],["Inspector","inspector"],["Supporting pages","supporting_text",0,0,"wrap"],["Held because","_hold",0,0,"wrap"]],
@@ -1953,7 +1956,7 @@ const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_n
   test_cert:[["Cert no","cert_no",0,1],["Family","family"],["Date","date"],["Mill","mill",0,0,"wrap"],["MPS PO","mps_po"],["Ronin PO","ronin_po"],
     ["Type","cert_type"],["Heats","heats_text",0,0,"wrap"],["Checked","checked",0,0,"tick"]]};
 const ALIAS={order_number:"po_number",supplier:"supplier_name"};      // older sidecars (generic reader)
-const DT={ReleaseNotes:"rn",SupplierInvoices:"supplier_invoice",SupplierInvoicesArchive:"supplier_invoice",PurchaseOrders:"po",PolymerOrders:"pl",ProofOfPayments:"pop",JobTransfers:"jt",DeliveryNotes:"dn",WorkshopSheets:"ws",TestCerts:"test_cert"};
+const DT={OtherDocuments:"od",ReleaseNotes:"rn",SupplierInvoices:"supplier_invoice",SupplierInvoicesArchive:"supplier_invoice",PurchaseOrders:"po",PolymerOrders:"pl",ProofOfPayments:"pop",JobTransfers:"jt",DeliveryNotes:"dn",WorkshopSheets:"ws",TestCerts:"test_cert"};
 const money=v=>v==null||v===""?"":(+v).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2});
 function checks(x){
   const f=x.fields||{},c=[];
@@ -2009,6 +2012,9 @@ const HEAD={
     ["Customer DWG No","customer_dwg_no"],["Rev","rev",1],["Batch No","batch_no"],["MTO","mto",1],["Drawn by","drawn_by",1],
     ["QA stamped","stamped",0,0,"yn"],["Issued for construction signed","ifc_signed",0,0,"yn"],["Stamp date","stamp_date"],
     ["Stamp date as written","stamp_date_as_written",1,1],["Status","status",1],["End detail","end_detail",1],["Layout","layout",1,1],["Legibility","legibility",1,1],["Notes","notes",0,0,"wide"]]},
+  other_doc:{title:"Other document",rows:[["Summary","summary",0,0,"wide"],["Document type","od_doc_type"],["From","od_from"],
+    ["Date","date"],["Order / reference","order_number"],["Job number","job_number"],["Category (library folder)","od_category"],
+    ["Rule","od_rule",1,1],["Words that matched","od_evidence",1,1],["Moved from","moved_from",1,1]]},
   release_note:{title:"Release note",rows:[["Release number","release_number"],["As read","release_number_read",1,1],["Customer","customer"],
     ["Project","project_description"],["Project number","project_number"],["MPS job (MPS project number)","job_number"],["QCP number","qcp_number"],
     ["Inspection date","inspection_date"],["Inspections","inspections_text",0,0,"wide"],["Other","other_text",1,1],

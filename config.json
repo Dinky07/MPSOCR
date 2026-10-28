@@ -157,6 +157,12 @@
     "px": 1800,
     "ocr_jobs": 4
    }
+  },
+  "OtherDocuments": {
+   "doc_type": "other_doc",
+   "label": "Other Documents",
+   "model": "qwen2.5vl:7b",
+   "_note": "filled by od_sort.py only (not read by the worker: flags/process_off_OtherDocuments)"
   }
  },
  "dashboard": {
