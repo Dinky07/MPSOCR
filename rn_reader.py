@@ -308,7 +308,8 @@ def parse_grid(text):
 
 def read_grid(pdf, page, c, ws, H):
     """Inspections ticked, from a strip of the page around the tick-box table; None when the table isn't found."""
-    top = _find(ws, r"^INSPECTION$", r"^TO$")
+    # the hole punch sometimes eats the first letter ("_*NSPECTION", 28 Oct test page 5)
+    top = _find(ws, r"^\W*I?NSPECTION$", r"^TO$") or _find(ws, r"^\W*PRE?F?OR?MED$|^\W*PERFORMED$")
     if not top:
         return None
     bot = _find(ws, r"^ELECTRICAL$", None, after=top[0]) or _find(ws, r"^I?TM?E?MENS$", None, after=top[0])
@@ -330,7 +331,7 @@ def read_grid(pdf, page, c, ws, H):
 
 
 def read_items_strip(pdf, page, c, ws, H):
-    top = _find(ws, r"^I?T[MN]?E?MENS$|^ITEMS$", r"^RELEASE") or _find(ws, r"^QTY$")
+    top = _find(ws, r"^\W*I?T[MN]?E?MENS$|^\W*ITEMS$", r"^RELEASE") or _find(ws, r"^\W*QTY$")
     if not top:
         return None
     bot = _find(ws, r"^NON$", r"^CONFORMING", after=top[0]) or _find(ws, r"^RELEASED$", None, after=top[0])
@@ -566,6 +567,8 @@ def to_fields(reads, pages_info, source_name=""):
             flags.append(f"check: line {it['#']}: no item ref or description")
     if f["legibility"] == "poor":
         flags.append("poor_legibility")
+    if f.get("inspections_from") == "whole page" and reads:
+        flags.append("check: inspections read from the whole page (the tick-box strip was not found): check the ticks")
     marks = [clean(r.get("page_marker")) for r in reads]
     if any(m and re.match(r"P\s*1\s*/\s*([2-9])", m.upper()) for m in marks[:1]) and len(reads) < 2:
         flags.append("check: marked as page 1 of several but the next release-note page was not in the scan")
