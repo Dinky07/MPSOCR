@@ -866,6 +866,7 @@ EDITABLE = {
     "ws": ("date", "sheet_no", "sheet_of", "project", "corrosion_int", "corrosion_ext", "destination", "job_number", "spec",
            "customer_dwg_no", "rev", "mps_dwg_no", "batch_no", "mto", "drawn_by", "status", "end_detail", "notes",
            "stamped", "ifc_signed", "stamp_date"),
+    "sales_quote": ("quote_ref", "quote_revision", "customer", "date", "total", "kusasa", "accepted", "summary"),
     "other_doc": ("summary", "od_doc_type", "od_from", "date", "order_number", "job_number", "od_category"),
     "release_note": ("release_number", "customer", "project_description", "project_number", "job_number", "qcp_number",
                      "inspection_date", "signed_off", "inspector", "inspector_company", "signed_date", "mps_name",
@@ -885,7 +886,7 @@ NUMERIC = {"amount", "subtotal", "vat", "total", "unit_price", "qty", "sheet_no"
 
 
 def _edit_value(k, v, doc_type):
-    if k in ("cancelled", "amended", "stamped", "ifc_signed", "signed_off"):
+    if k in ("cancelled", "amended", "stamped", "ifc_signed", "signed_off", "kusasa", "accepted", "cod"):
         return str(v).strip().lower() in ("yes", "true", "1", "on")
     v = "" if v is None else str(v).strip()
     if v == "":
@@ -1938,12 +1939,14 @@ async function loadOut(){
 const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_number",0,1],["Date","invoice_date"],["Total","total",1]],
   po:[["Order no","order_number",0,1],["Supplier","supplier"],["Document type","library_doc_type",0,0,"wrap"],["Method","order_method"],["Att of","att_of"],["Date","date"],
     ["Allocation","allocation"],["Job","job_number"],["Other PO ref","other_po_ref"],["Quote ref","quote_ref"],
-    ["Writer","writer"],["Checked","checked",0,0,"tick"],["Total","total",1]],
+    ["Writer","writer"],["C.O.D","cod"],["Checked","checked",0,0,"tick"],["Total","total",1]],
   pl:[["PL order","order_number",0,1],["PO number","polymer_po"],["Supplier","supplier"],["Attention","att_of"],["Order method","order_method"],
-    ["Date","date"],["Writer","writer"],["Checked","checked",0,0,"tick"],["Total","total",1]],
+    ["Date","date"],["Writer","writer"],["C.O.D","cod"],["Checked","checked",0,0,"tick"],["Total","total",1]],
   pop:[["Date","date"],["Amount","amount",1],["Statement ref","statement_ref"],["Account name","account_name",0,1],["Creditor code","creditor_code"],
     ["Paid from","from_account_name"],["Original folder","_folder",0,0,"wrap"],["Checked","checked",0,0,"tick"]],
   jt:[["JT","jt_number",0,1],["Job","job_number"],["Date","date"],["From","from"],["Writer","written_by"]],
+  sq:[["Quote ref","quote_ref",0,1],["Customer","customer",0,0,"wrap"],["Date","date"],["Total","total",1],["Kusasa","kusasa"],
+    ["Accepted","accepted"],["Summary","summary",0,0,"wrap"],["Moved from","moved_from"]],
   od:[["Category","od_category"],["Document type","od_doc_type",0,0,"wrap"],["From","od_from",0,0,"wrap"],["Date","date"],
     ["Summary","summary",0,0,"wrap"],["Moved from","moved_from"]],
   rn:[["Release number","release_number",0,1],["Customer","customer",0,0,"wrap"],["Project","project_description",0,0,"wrap"],
@@ -1956,7 +1959,7 @@ const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_n
   test_cert:[["Cert no","cert_no",0,1],["Family","family"],["Date","date"],["Mill","mill",0,0,"wrap"],["MPS PO","mps_po"],["Ronin PO","ronin_po"],
     ["Type","cert_type"],["Heats","heats_text",0,0,"wrap"],["Checked","checked",0,0,"tick"]]};
 const ALIAS={order_number:"po_number",supplier:"supplier_name"};      // older sidecars (generic reader)
-const DT={OtherDocuments:"od",ReleaseNotes:"rn",SupplierInvoices:"supplier_invoice",SupplierInvoicesArchive:"supplier_invoice",PurchaseOrders:"po",PolymerOrders:"pl",ProofOfPayments:"pop",JobTransfers:"jt",DeliveryNotes:"dn",WorkshopSheets:"ws",TestCerts:"test_cert"};
+const DT={SalesQuotes:"sq",OtherDocuments:"od",ReleaseNotes:"rn",SupplierInvoices:"supplier_invoice",SupplierInvoicesArchive:"supplier_invoice",PurchaseOrders:"po",PolymerOrders:"pl",ProofOfPayments:"pop",JobTransfers:"jt",DeliveryNotes:"dn",WorkshopSheets:"ws",TestCerts:"test_cert"};
 const money=v=>v==null||v===""?"":(+v).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2});
 function checks(x){
   const f=x.fields||{},c=[];
@@ -2012,6 +2015,8 @@ const HEAD={
     ["Customer DWG No","customer_dwg_no"],["Rev","rev",1],["Batch No","batch_no"],["MTO","mto",1],["Drawn by","drawn_by",1],
     ["QA stamped","stamped",0,0,"yn"],["Issued for construction signed","ifc_signed",0,0,"yn"],["Stamp date","stamp_date"],
     ["Stamp date as written","stamp_date_as_written",1,1],["Status","status",1],["End detail","end_detail",1],["Layout","layout",1,1],["Legibility","legibility",1,1],["Notes","notes",0,0,"wide"]]},
+  sales_quote:{title:"Sales quotation",rows:[["Quote ref","quote_ref"],["Revision","quote_revision",1],["Customer","customer"],["Date","date"],
+    ["Total","total"],["Kusasa (HDPE)","kusasa",0,0,"yn"],["Accepted","accepted",0,0,"yn"],["Summary","summary",0,0,"wide"],["Moved from","moved_from",1,1]]},
   other_doc:{title:"Other document",rows:[["Summary","summary",0,0,"wide"],["Document type","od_doc_type"],["From","od_from"],
     ["Date","date"],["Order / reference","order_number"],["Job number","job_number"],["Category (library folder)","od_category"],
     ["Rule","od_rule",1,1],["Words that matched","od_evidence",1,1],["Moved from","moved_from",1,1]]},
@@ -2142,7 +2147,7 @@ function docRows(t,list,held){
       +(held?` <button class="danger" data-act="delete" data-type="${esc(t)}" data-name="${esc(x.name)}" title="Take it out of the pipeline (kept in pipeline/deleted for recovery)">Delete</button>`:"");
     const fv=k=>k=="_folder"?x.source_folder:k=="_hold"?(HOLD[x.hold_reason]||x.hold_reason):f[k]??f[ALIAS[k]];
     const cell=(k,n,isId,kind)=>kind=="tick"?`<input type="checkbox" class="tick" title="Tick once you have checked this order against the PDF (fills Checked in SharePoint)" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" ${f.checked?"checked":""}>`
-      :n?esc(money(fv(k))):(fv(k)!=null&&fv(k)!=="")?esc(fv(k)):isId?`<span class="muted" title="no number read; file name shown">${esc((x.file||x.name).replace(/\.(pdf|json)$/i,""))}</span>`:"";
+      :n?esc(money(fv(k))):typeof fv(k)=="boolean"?(fv(k)?"Yes":""):(fv(k)!=null&&fv(k)!=="")?esc(fv(k)):isId?`<span class="muted" title="no number read; file name shown">${esc((x.file||x.name).replace(/\.(pdf|json)$/i,""))}</span>`:"";
     let r=`<tr class="doc" data-open="${esc(id)}">${cols.map(([l,k,n,isId,kind])=>`<td class="${n?"num":""}${kind=="wrap"?" wrap":""}${kind=="tick"?" tickc":""}">${cell(k,n,isId,kind)}</td>`).join("")}
       <td class="num">${x.item_count}</td><td class="chk">${checks(x)}</td><td class="act">${pdf} ${btn}</td></tr>`;
     if(open){

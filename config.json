@@ -163,6 +163,12 @@
    "label": "Other Documents",
    "model": "qwen2.5vl:7b",
    "_note": "filled by od_sort.py only (not read by the worker: flags/process_off_OtherDocuments)"
+  },
+  "SalesQuotes": {
+   "doc_type": "sales_quote",
+   "label": "Sales Quotes",
+   "model": "qwen2.5vl:7b",
+   "_note": "filled by route_sort.py only (not read by the worker: flags/process_off_SalesQuotes)"
   }
  },
  "dashboard": {

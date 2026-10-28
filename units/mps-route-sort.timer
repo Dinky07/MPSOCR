@@ -1,0 +1,9 @@
+[Unit]
+Description=MPS routing rules, hourly (route_sort.py)
+
+[Timer]
+OnCalendar=*-*-* *:25:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target
