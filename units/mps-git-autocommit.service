@@ -1,0 +1,6 @@
+[Unit]
+Description=MPS pipeline: commit any uncommitted change in /srv/ocr/pipeline (review F12)
+[Service]
+Type=oneshot
+User=dinoc
+ExecStart=/srv/ocr/pipeline/commit.sh

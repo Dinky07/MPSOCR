@@ -1,0 +1,7 @@
+[Unit]
+Description=MPS pipeline: hourly auto-commit (review F12)
+[Timer]
+OnCalendar=*-*-* *:50:00
+Persistent=true
+[Install]
+WantedBy=timers.target

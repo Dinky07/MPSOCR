@@ -151,5 +151,6 @@
     ]
   },
   "px": 1600,
-  "_note_px_ctx": "review F13 (28 Oct): the generic extractor renders at px 1600 (was dpi 200) and uses num_ctx 49152 like the readers, so Ollama never reloads a model for a different context"
+  "_note_px_ctx": "review F13 (28 Oct): the generic extractor renders at px 1600 (was dpi 200) and uses num_ctx 49152 like the readers, so Ollama never reloads a model for a different context",
+  "repo": "/srv/ocr/pipeline"
 }
