@@ -46,11 +46,12 @@ DEFAULT = {
                  r"ACCOUNT\s+CONFIRMATION\s+LETTER"], "none": [r"TAX\s+INVOICE"],
          "confirm": "Is this a letter from a bank confirming someone's bank account details? Answer only yes or no.",
          "why": "bank confirmation letter: not needed"},
-        {"name": "Supplier invoice to Polymer", "action": "remove",
-         "queues": ["SupplierInvoices", "SupplierInvoicesArchive", "PurchaseOrders", "PolymerOrders", "ProofOfPayments"],
-         "all": [r"\bINVOICE\b", r"POLYMER\s+(LINERS|LINING)"], "none": [r"MINING\s+PRESSURE\s+SYSTEMS", r"PRO\s*-?\s*FORMA", r"QUOTATION"],
-         "confirm": "Is this an invoice addressed TO Polymer Liners / Polymer Lining Systems as the customer being billed? Answer only yes or no.",
-         "why": "supplier invoice made out to Polymer Lining Systems: not MPS's"},
+        # Dino 28 Oct 17:14 (was a removal): pro formas, invoices and delivery notes made out to Polymer Lining Systems
+        # -> Other Documents, category Polymer (new scans and the documents waiting now)
+        {"name": "Polymer", "action": "other_documents", "category": "Polymer", "any_age": True,
+         "queues": ["SupplierInvoices", "SupplierInvoicesArchive", "PurchaseOrders", "PolymerOrders", "ProofOfPayments", "DeliveryNotes"],
+         "all": [r"PRO\s*-?\s*FORMA|\bINVOICE\b|DELIVERY\s+NOTE|WAYBILL", r"POLYMER\s+(LINERS|LINING)"], "none": [r"QUOTATION"],
+         "confirm": "Is this a pro forma invoice, an invoice or a delivery note made out TO Polymer Liners / Polymer Lining Systems as the customer (Polymer is the buyer, not the company issuing it)? Answer only yes or no."},
         {"name": "Test cert marked SAMPLE", "action": "remove", "queues": ["PurchaseOrders", "PolymerOrders", "ProofOfPayments", "SupplierInvoices"],
          "all": [r"\bSAMPLE\b", r"TEST\s+CERTIFICATE|MILL\s+TEST|INSPECTION\s+CERTIFICATE|EN\s*10204|CHEMICAL\s+COMPOSITION"],
          "confirm": "Is the word SAMPLE stamped, typed large or written ACROSS this page as a mark on the document (not just a column heading such as 'Sample No' or 'Sample position' in a table)? Answer only yes or no.",
@@ -323,7 +324,7 @@ def main():
             else:
                 if is_order or uploaded or f.get("checked"):
                     continue
-                if r["action"] == "other_documents" and not a.od_all and str(sc.get("processed_at") or "") < c.get("od_new_since", ""):
+                if r["action"] == "other_documents" and not a.od_all and not r.get("any_age") and str(sc.get("processed_at") or "") < c.get("od_new_since", ""):
                     continue                                    # the backlog goes through od_sort's review sheet
             m = matches(r, text or "", head, fname, own)
             if not m and r.get("vision") and (a.apply or a.vision):

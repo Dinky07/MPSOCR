@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Clear the purchase-order queue (Dino 28 Oct 11:01): a clear Mining Pressure Systems order or a clear Polymer Lining
+"""v8. Clear the purchase-order queue (Dino 28 Oct 11:01): a clear Mining Pressure Systems order or a clear Polymer Lining
 Systems order is marked Checked; date issues on the archive (backfill) orders are ignored - the date comes from the
 buying spreadsheet where it has the order.
 
@@ -35,7 +35,10 @@ import sidecar_lock                                # noqa: E402
 import dashboard as D                              # noqa: E402  _recompute()
 
 ROOT = Path("/srv/ocr/scans/pipeline")
-DATE_FLAG = re.compile(r"\bdate\b|scan[- ]date|\byear\b", re.I)
+# v8 (blind review 28 Oct 18:50): only the reader's own date checks count as date-only ("date read as ...", "date ...
+# matches the scan folder year ...", missing_date); a job check that mentions the date ("job X not in the job list; the
+# order date fits Y") is a job check and blocks like any other
+DATE_FLAG = re.compile(r"^(check: )?(date\b|missing_date$)", re.I)
 # Dino 28 Oct 11:20: an MPS order made out to Polymer is a clear MPS order; differences in Att of / Signed by do not
 # block (the spreadsheet's values are written) - only Supplier, Job or line count do
 POLY_NOTE = re.compile(r"MPS order A\d{5} made out to Polymer .*taken as an MPS order", re.I)
@@ -58,6 +61,20 @@ try:
             SAGE_JOBS.add(re.sub(r"\s", "", _r["JobNumber"]).upper())
 except Exception:
     pass
+
+
+# Dino 28 Oct 17:16 (IGT 16013, job 31367E): a Kusasa IGT with a real Sage job goes up - IGTs sync on order number +
+# job (config SyncIf "IGT"), so it is released to the queue, not ticked; their allocation is the customer / site, so
+# "allocation X is not on the list" doesn't apply, nor a supplier read matched to KUSASA or a job box reading ignored
+IGT_OK = re.compile(r"allocation .+ is not on the list|matched to KUSASA|job box read as .+: not a job number, ignored", re.I)
+
+
+def folder_supplier(sc):
+    """Dino 28 Oct 17:25: the order's original folder is the supplier (Melyssa\\Orders-MPS\\2024\\V\\VACUUM SERVICES)."""
+    parts = [p for p in re.split(r"[\\/]+", str(sc.get("source_folder") or "")) if p.strip()]
+    if len(parts) >= 3 and not re.fullmatch(r"\d{4}|[A-Z0-9]|ORDERS?.*|MELYSSA", parts[-1].strip(), re.I):
+        return parts[-1].strip()
+    return None
 
 
 def file_supplier(flags, f, sc):
@@ -152,6 +169,32 @@ for t in ("PurchaseOrders", "PolymerOrders"):
         on, form = str(f.get("order_number") or "").upper(), f.get("form")
         kind = ("MPS" if form == "mps_order" and re.fullmatch(r"A\d{5}", on) else
                 "Polymer" if form == "polymer_order" and re.fullmatch(r"PL\d{4}", on) else None)
+        if form == "internal_group_transfer" and re.fullmatch(r"\d{5}", on):
+            if not a.hold or f.get("checked"):
+                continue
+            job = re.sub(r"\s", "", str(f.get("job_number") or "")).upper()
+            flags_i = [str(x) for x in (sc.get("flags") or []) if not HELD.match(str(x))]
+            left = [x for x in flags_i if not (ok_flag(x) or IGT_OK.search(x))]
+            res = ("IGT stays: job not a Sage job" if job not in SAGE_JOBS else
+                   "IGT stays: " + "; ".join(left)[:60] if left else
+                   "IGT cancelled" if f.get("cancelled") else "IGT released (Sage job)")
+            if res == "IGT released (Sage job)" and a.apply:
+                try:
+                    with sidecar_lock.locked(js, "po_autocheck igt"):
+                        sc = json.load(open(js, encoding="utf-8"))
+                        f2 = sc.setdefault("fields", {})
+                        f2["checks"] = [c for c in (f2.get("checks") or []) if not (ok_flag(c) or IGT_OK.search(str(c)))]
+                        f2["review"] = "; ".join(f2["checks"]) or None
+                        sc["flags"] = [x for x in (sc.get("flags") or []) if not (ok_flag(x) or IGT_OK.search(str(x)))]
+                        sc.setdefault("edits", []).append({"at": stamp, "by": "po_autocheck --hold (IGT with a Sage job: released)",
+                                                           "changes": [{"field": "hold_reason", "old": sc.get("hold_reason"), "new": None}]})
+                        _release(js, sc, stamp)
+                except (sidecar_lock.Locked, ValueError) as e:
+                    res = f"IGT left on hold: {e}"[:80]
+            why_not[res if not res.startswith("IGT stays: ") or res.endswith("Sage job") else "IGT stays: other checks"] += 1
+            rows.append({"file": js.name, "type": t, "kind": "IGT", "order": on, "supplier": f.get("supplier"), "backfill": "",
+                         "status": "", "diffs": "", "result": res, "why": "", "flags": "; ".join(flags_i)[:300]})
+            continue
         backfill = str(sc.get("source_sha256") or "").lower() in fed
         flags = [str(x) for x in (sc.get("flags") or []) if not HELD.match(str(x))]   # "held: ..." is the hold itself
         why = None
@@ -171,10 +214,15 @@ for t in ("PurchaseOrders", "PolymerOrders"):
             why = "no lines"
         key = PD.order_key(f, sc.get("source_file") or sc.get("file"))
         reg = PD.pick(regs.get(key) or [], f) if key else None
-        fsup, ssup = file_supplier(flags, f, sc), (reg or {}).get("supplier")
-        sup_ok = bool(reg is not None and fsup and ssup and PD.same("supplier", fsup, ssup))
+        fsup, ssup, dsup = file_supplier(flags, f, sc), (reg or {}).get("supplier"), folder_supplier(sc)
+        # the supplier in the file name, or the order's folder (17:25: the file name often says KUSASA / PAGE), agrees
+        # with the buying spreadsheet
+        sup_ok = bool(reg is not None and ssup and ((fsup and PD.same("supplier", fsup, ssup)) or
+                                                     (dsup and PD.same("supplier", dsup, ssup))))
         status0, diffs0, _h, _l = PD.compare(f, reg)
-        job_ok = bool(reg is not None and "Job" not in diffs0
+        # v8: the spreadsheet must give the job and agree (a blank Job cell confirms nothing): the order stays for the
+        # checking file otherwise
+        job_ok = bool(reg is not None and (reg or {}).get("job_number") and "Job" not in diffs0
                       and re.sub(r"\s", "", str(f.get("job_number") or "")).upper() in SAGE_JOBS)
         blocking = [x for x in flags if not ok_flag(x) and not (sup_ok and SUP_FLAG.search(x))
                     and not (job_ok and JOB_FLAG.search(x))]
@@ -195,7 +243,8 @@ for t in ("PurchaseOrders", "PolymerOrders"):
         how = None if why else ("already checked" if f.get("checked") else
                                 "auto: spreadsheet" if reg is not None else "auto: reader only")
         if how == "auto: spreadsheet" and sup_ok and [x for x in flags if SUP_FLAG.search(x)]:
-            how = "auto: spreadsheet (supplier: file name + spreadsheet)"
+            how = ("auto: spreadsheet (supplier: file name + spreadsheet)" if fsup and PD.same("supplier", fsup, ssup)
+                   else "auto: spreadsheet (supplier: folder + spreadsheet)")
         if how and how.startswith("auto: spreadsheet") and job_ok and [x for x in flags if JOB_FLAG.search(x)]:
             how += " (job: Sage job, spreadsheet agrees)"
         if date_only:

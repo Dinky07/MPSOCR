@@ -43,26 +43,26 @@
    "why": "bank confirmation letter: not needed"
   },
   {
-   "name": "Supplier invoice to Polymer",
-   "action": "remove",
+   "name": "Polymer",
+   "action": "other_documents",
+   "category": "Polymer",
+   "any_age": true,
    "queues": [
     "SupplierInvoices",
     "SupplierInvoicesArchive",
     "PurchaseOrders",
     "PolymerOrders",
-    "ProofOfPayments"
+    "ProofOfPayments",
+    "DeliveryNotes"
    ],
    "all": [
-    "\\bINVOICE\\b",
+    "PRO\\s*-?\\s*FORMA|\\bINVOICE\\b|DELIVERY\\s+NOTE|WAYBILL",
     "POLYMER\\s+(LINERS|LINING)"
    ],
    "none": [
-    "MINING\\s+PRESSURE\\s+SYSTEMS",
-    "PRO\\s*-?\\s*FORMA",
     "QUOTATION"
    ],
-   "confirm": "Is this an invoice addressed TO Polymer Liners / Polymer Lining Systems as the customer being billed? Answer only yes or no.",
-   "why": "supplier invoice made out to Polymer Lining Systems: not MPS's"
+   "confirm": "Is this a pro forma invoice, an invoice or a delivery note made out TO Polymer Liners / Polymer Lining Systems as the customer (Polymer is the buyer, not the company issuing it)? Answer only yes or no."
   },
   {
    "name": "Test cert marked SAMPLE",
