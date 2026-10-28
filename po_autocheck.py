@@ -41,6 +41,20 @@ DATE_FLAG = re.compile(r"\bdate\b|scan[- ]date|\byear\b", re.I)
 POLY_NOTE = re.compile(r"MPS order A\d{5} made out to Polymer .*taken as an MPS order", re.I)
 ok_flag = lambda x: bool(DATE_FLAG.search(str(x)) or POLY_NOTE.search(str(x))) or x == "missing_date"
 BLOCKING_DIFF = lambda d: d in ("Supplier", "Job") or d.startswith("lines ")
+# Dino 28 Oct 16:57: a supplier check is settled when the supplier in the file name and the buying spreadsheet agree
+# (A81115: file name AVIC FASTENERS, read as AUIC FASTENER) -> the spreadsheet's supplier, Checked (training data)
+SUP_FLAG = re.compile(r"file name says supplier|supplier read as|supplier not read|matched to", re.I)
+
+
+def file_supplier(flags, f, sc):
+    for x in flags:
+        m = re.search(r"file name says supplier (.+?)\s*$", str(x), re.I)
+        if m:
+            return m.group(1)
+    if f.get("supplier_file"):
+        return f["supplier_file"]
+    m = re.match(r"^\s*(?!PO\d)([A-Z][^-]{2,60}?)\s*-\s*(?:A\d{5}|PL\d{4})", str(sc.get("source_file") or ""), re.I)
+    return m.group(1) if m and m.group(1).upper() not in ("PAGE", "UNKNOWN SUPPLIER") else None
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--apply", action="store_true")
@@ -141,20 +155,31 @@ for t in ("PurchaseOrders", "PolymerOrders"):
             why = "no supplier"
         elif not [i for i in (f.get("items") or []) if isinstance(i, dict) and i.get("description")]:
             why = "no lines"
-        blocking = [x for x in flags if not ok_flag(x)]
+        key = PD.order_key(f, sc.get("source_file") or sc.get("file"))
+        reg = PD.pick(regs.get(key) or [], f) if key else None
+        fsup, ssup = file_supplier(flags, f, sc), (reg or {}).get("supplier")
+        sup_ok = bool(reg is not None and fsup and ssup and PD.same("supplier", fsup, ssup))
+        blocking = [x for x in flags if not ok_flag(x) and not (sup_ok and SUP_FLAG.search(x))]
         if not why and blocking and not f.get("checked"):
             why = "review checks"
             for x in blocking:
                 block_flags[re.sub(r"\d+", "N", x)[:90]] += 1
-        key = PD.order_key(f, sc.get("source_file") or sc.get("file"))
-        reg = PD.pick(regs.get(key) or [], f) if key else None
         status, diffs, hdr, lines = PD.compare(f, reg)
-        if not why and not f.get("checked") and reg is not None and status == "check" and [d for d in diffs if BLOCKING_DIFF(d)]:
-            why = "spreadsheet disagrees: " + ", ".join(d for d in diffs if BLOCKING_DIFF(d))
+        bd = [d for d in diffs if BLOCKING_DIFF(d) and not (sup_ok and d == "Supplier")]
+        if not why and not f.get("checked") and reg is not None and status == "check" and bd:
+            why = "spreadsheet disagrees: " + ", ".join(bd)
+        # Dino 16:57: on hold with only date checks (the spreadsheet differing on something the reader didn't flag):
+        # back to the queue unchecked, with the spreadsheet's date
+        date_only = bool(a.hold and kind in ("MPS", "Polymer") and not f.get("checked") and why
+                         and why.startswith("spreadsheet disagrees") and not blocking)
         if not why and not f.get("checked") and reg is None and a.no_reader_only:
             why = "no spreadsheet row (--no-reader-only)"
         how = None if why else ("already checked" if f.get("checked") else
                                 "auto: spreadsheet" if reg is not None else "auto: reader only")
+        if how == "auto: spreadsheet" and sup_ok and [x for x in flags if SUP_FLAG.search(x)]:
+            how = "auto: spreadsheet (supplier: file name + spreadsheet)"
+        if date_only:
+            how, why = "released unchecked (date from spreadsheet)", None
         why_not[why or how] += 1
         rows.append({"file": js.name, "type": t, "kind": kind or "", "order": on, "supplier": f.get("supplier"),
                      "backfill": backfill, "status": status, "diffs": ", ".join(diffs), "result": how or "stays",
@@ -170,6 +195,17 @@ for t in ("PurchaseOrders", "PolymerOrders"):
                 if how == "already checked":
                     if a.hold:
                         _release(js, sc, stamp)
+                    continue
+                if how.startswith("released unchecked"):
+                    old = f.get("date")
+                    if reg is not None and reg.get("date"):
+                        f["date"], f["date_from"] = reg["date"], "spreadsheet"
+                    f["checks"] = [c for c in (f.get("checks") or []) if not ok_flag(c)]
+                    f["review"] = "; ".join(f["checks"]) or None
+                    sc["flags"] = [x for x in (sc.get("flags") or []) if not ok_flag(x)]
+                    sc.setdefault("edits", []).append({"at": stamp, "by": "po_autocheck --hold (date only: released)",
+                                                       "changes": [{"field": "date", "old": old, "new": f.get("date")}]})
+                    _release(js, sc, stamp)
                     continue
                 if "fields_read" not in sc:
                     sc["fields_read"] = json.loads(json.dumps(f))      # the reader's own reading, for training
@@ -197,7 +233,9 @@ for t in ("PurchaseOrders", "PolymerOrders"):
                 f["checked"] = True
                 f["checks"] = [c for c in (f.get("checks") or []) if not ok_flag(c)]
                 f["review"] = "; ".join(f["checks"]) or None
-                sc["flags"] = [x for x in (sc.get("flags") or []) if not ok_flag(x)]
+                sc["flags"] = [x for x in (sc.get("flags") or []) if not ok_flag(x) and not (sup_ok and SUP_FLAG.search(str(x)))]
+                f["checks"] = [c for c in (f.get("checks") or []) if not (sup_ok and SUP_FLAG.search(str(c)))]
+                f["review"] = "; ".join(f["checks"]) or None
                 sc["needs_review"] = bool(sc["flags"])
                 sc["checked_at"], sc["checked_how"] = stamp, how
                 sc.setdefault("edits", []).append({"at": stamp, "by": f"po_autocheck ({how})", "changes": changes})
