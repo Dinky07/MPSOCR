@@ -1908,7 +1908,7 @@ async function loadOut(){
   catch(e){}
   renderOut();clearTimeout(outTimer);outTimer=setTimeout(()=>{if(tab!="overview")loadOut()},10000)}
 const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_number",0,1],["Date","invoice_date"],["Total","total",1]],
-  po:[["Order no","order_number",0,1],["Supplier","supplier"],["Method","order_method"],["Att of","att_of"],["Date","date"],
+  po:[["Order no","order_number",0,1],["Supplier","supplier"],["Document type","library_doc_type",0,0,"wrap"],["Method","order_method"],["Att of","att_of"],["Date","date"],
     ["Allocation","allocation"],["Job","job_number"],["Other PO ref","other_po_ref"],["Quote ref","quote_ref"],
     ["Writer","writer"],["Checked","checked",0,0,"tick"],["Total","total",1]],
   pl:[["PL order","order_number",0,1],["PO number","polymer_po"],["Supplier","supplier"],["Attention","att_of"],["Order method","order_method"],

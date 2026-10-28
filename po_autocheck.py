@@ -19,6 +19,10 @@ Everything else stays in the queue for the checking file. The reader's own readi
 DRY RUN unless --apply; reports/po autocheck <stamp>[ dry run].csv/.json. Takes the sidecar lock.
 
     python3 po_autocheck.py [--apply] [--no-reader-only]
+    python3 po_autocheck.py --hold [--apply]   # the hold queues: an order that is clear, or already ticked Checked (the
+                                               # checking-file import ticks it where it lies), is marked and released
+    python3 po_autocheck.py --park [--apply]   # Dino 28 Oct 11:15: every order left unchecked with review checks in the
+                                               # queue goes to hold for checking (dashboard Release / --hold bring it back)
 """
 import argparse, csv, glob, json, os, re, sys
 from collections import Counter
@@ -41,7 +45,31 @@ BLOCKING_DIFF = lambda d: d in ("Supplier", "Job") or d.startswith("lines ")
 ap = argparse.ArgumentParser()
 ap.add_argument("--apply", action="store_true")
 ap.add_argument("--no-reader-only", action="store_true", help="only orders the spreadsheet confirms")
+ap.add_argument("--hold", action="store_true", help="look at out/<type>/hold and release what is clear or checked")
+ap.add_argument("--park", action="store_true", help="move unchecked orders that need review from the queue to hold")
 a = ap.parse_args()
+assert not (a.hold and a.park), "--hold or --park, not both"
+HELD = re.compile(r"^held: ")
+
+
+def park(js, t):
+    """queue -> hold, JSON first (the PC only syncs JSONs in out/<type>)."""
+    with sidecar_lock.locked(js, "po_autocheck park"):
+        sc = json.load(open(js, encoding="utf-8"))
+        f = sc.get("fields") or {}
+        if f.get("checked") or not sc.get("needs_review"):
+            return "skipped (changed meanwhile)"
+        n = len([x for x in (sc.get("flags") or []) if not HELD.match(str(x))])
+        reason = f"review checks ({n})"
+        sc["hold_reason"] = reason
+        sc["flags"] = [x for x in (sc.get("flags") or []) if not HELD.match(str(x))] + ["held: " + reason]
+        sc.setdefault("edits", []).append({"at": stamp, "by": "po_autocheck --park (Dino 28 Oct: unchecked orders to hold)",
+                                           "changes": [{"field": "hold_reason", "old": None, "new": reason}]})
+        tmp = js.with_name(js.name + ".ac.tmp")
+        tmp.write_text(json.dumps(sc, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        os.replace(tmp, js)
+        D.move_doc(js.parent, js.parent / "hold", js.name, json_last=False)
+    return "parked"
 
 fed = set()
 for led in (ROOT / "feed_po.csv",):
@@ -50,23 +78,58 @@ for led in (ROOT / "feed_po.csv",):
 regs = PD.registers()
 stamp = datetime.now().isoformat(timespec="seconds")
 rows, why_not, block_flags = [], Counter(), Counter()
+
+
+def _release(js, sc, stamp):
+    """hold -> queue, JSON last. Called under the sidecar lock. A name clash leaves the sidecar untouched on hold."""
+    if (js.parent.parent / js.name).exists() or (js.parent.parent / str(sc.get("file") or "x/")).exists():
+        raise ValueError(f"{js.name} or its PDF is already in the queue")
+    old = sc.pop("hold_reason", None)
+    sc["flags"] = [x for x in (sc.get("flags") or []) if not HELD.match(str(x))]
+    sc["needs_review"] = bool(sc["flags"]) and not (sc.get("fields") or {}).get("checked")
+    sc.setdefault("edits", []).append({"at": stamp, "by": "po_autocheck --hold (released)",
+                                       "changes": [{"field": "hold_reason", "old": old, "new": None}]})
+    tmp = js.with_name(js.name + ".ac.tmp")
+    tmp.write_text(json.dumps(sc, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    os.replace(tmp, js)
+    D.move_doc(js.parent, js.parent.parent, js.name, json_last=True)
 for t in ("PurchaseOrders", "PolymerOrders"):
-    for js in sorted(glob.glob(str(ROOT / "out" / t / "*.json"))):
+    for js in sorted(glob.glob(str(ROOT / "out" / t / ("hold/*.json" if a.hold else "*.json")))):
         js = Path(js)
         try:
             sc = json.load(open(js, encoding="utf-8"))
         except Exception:
             continue
         f = sc.get("fields") or {}
-        if sc.get("doc_type") != "po" or f.get("checked"):
+        if sc.get("doc_type") != "po":
+            continue
+        if a.park:
+            if f.get("checked") or not sc.get("needs_review"):
+                continue
+            res = "parked (dry run)"
+            if a.apply:
+                try:
+                    res = park(js, t)
+                except sidecar_lock.Locked:
+                    res = "locked (left for next run)"
+                except ValueError as e:
+                    res = f"not moved: {e}"[:80]
+            why_not[res] += 1
+            rows.append({"file": js.name, "type": t, "kind": "", "order": f.get("order_number"), "supplier": f.get("supplier"),
+                         "backfill": "", "status": "", "diffs": "", "result": res, "why": "",
+                         "flags": "; ".join(str(x) for x in (sc.get("flags") or []))[:300]})
+            continue
+        if f.get("checked") and not a.hold:
             continue
         on, form = str(f.get("order_number") or "").upper(), f.get("form")
         kind = ("MPS" if form == "mps_order" and re.fullmatch(r"A\d{5}", on) else
                 "Polymer" if form == "polymer_order" and re.fullmatch(r"PL\d{4}", on) else None)
         backfill = str(sc.get("source_sha256") or "").lower() in fed
-        flags = [str(x) for x in (sc.get("flags") or [])]
+        flags = [str(x) for x in (sc.get("flags") or []) if not HELD.match(str(x))]   # "held: ..." is the hold itself
         why = None
-        if not kind:
+        if f.get("checked"):
+            kind = kind or "checked"   # ticked Checked (checking file / dashboard) but still on hold: release as it is
+        elif not kind:
             why = f"not an MPS A-number / Polymer PL-number order ({form or 'no form'})"
         elif f.get("library_doc_type") != "Purchase Order":
             why = f"document type {f.get('library_doc_type')}"
@@ -79,18 +142,19 @@ for t in ("PurchaseOrders", "PolymerOrders"):
         elif not [i for i in (f.get("items") or []) if isinstance(i, dict) and i.get("description")]:
             why = "no lines"
         blocking = [x for x in flags if not ok_flag(x)]
-        if not why and blocking:
+        if not why and blocking and not f.get("checked"):
             why = "review checks"
             for x in blocking:
                 block_flags[re.sub(r"\d+", "N", x)[:90]] += 1
         key = PD.order_key(f, sc.get("source_file") or sc.get("file"))
         reg = PD.pick(regs.get(key) or [], f) if key else None
         status, diffs, hdr, lines = PD.compare(f, reg)
-        if not why and reg is not None and status == "check" and [d for d in diffs if BLOCKING_DIFF(d)]:
+        if not why and not f.get("checked") and reg is not None and status == "check" and [d for d in diffs if BLOCKING_DIFF(d)]:
             why = "spreadsheet disagrees: " + ", ".join(d for d in diffs if BLOCKING_DIFF(d))
-        if not why and reg is None and a.no_reader_only:
+        if not why and not f.get("checked") and reg is None and a.no_reader_only:
             why = "no spreadsheet row (--no-reader-only)"
-        how = None if why else ("auto: spreadsheet" if reg is not None else "auto: reader only")
+        how = None if why else ("already checked" if f.get("checked") else
+                                "auto: spreadsheet" if reg is not None else "auto: reader only")
         why_not[why or how] += 1
         rows.append({"file": js.name, "type": t, "kind": kind or "", "order": on, "supplier": f.get("supplier"),
                      "backfill": backfill, "status": status, "diffs": ", ".join(diffs), "result": how or "stays",
@@ -101,7 +165,11 @@ for t in ("PurchaseOrders", "PolymerOrders"):
             with sidecar_lock.locked(js, "po_autocheck"):
                 sc = json.load(open(js, encoding="utf-8"))           # fresh, under the lock
                 f = sc.setdefault("fields", {})
-                if f.get("checked"):
+                if f.get("checked") and how != "already checked":
+                    continue
+                if how == "already checked":
+                    if a.hold:
+                        _release(js, sc, stamp)
                     continue
                 if "fields_read" not in sc:
                     sc["fields_read"] = json.loads(json.dumps(f))      # the reader's own reading, for training
@@ -133,19 +201,26 @@ for t in ("PurchaseOrders", "PolymerOrders"):
                 sc["needs_review"] = bool(sc["flags"])
                 sc["checked_at"], sc["checked_how"] = stamp, how
                 sc.setdefault("edits", []).append({"at": stamp, "by": f"po_autocheck ({how})", "changes": changes})
-                tmp = js.with_name(js.name + ".ac.tmp")
-                tmp.write_text(json.dumps(sc, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
-                os.replace(tmp, js)
+                if a.hold:
+                    _release(js, sc, stamp)
+                else:
+                    tmp = js.with_name(js.name + ".ac.tmp")
+                    tmp.write_text(json.dumps(sc, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+                    os.replace(tmp, js)
         except sidecar_lock.Locked as e:
             why_not["locked (left for next run)"] += 1
             why_not[how] -= 1
+        except ValueError as e:                      # name clash in the queue: written as checked, left on hold
+            why_not[f"left on hold: {e}"[:80]] += 1
+            why_not[how] -= 1
 
-out = ROOT / "reports" / f"po autocheck {datetime.now():%Y-%m-%d %H%M}{'' if a.apply else ' dry run'}"
+mode = " hold" if a.hold else " park" if a.park else ""
+out = ROOT / "reports" / f"po autocheck{mode} {datetime.now():%Y-%m-%d %H%M}{'' if a.apply else ' dry run'}"
 with open(f"{out}.csv", "w", encoding="utf-8-sig", newline="") as fh:
     w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()) if rows else ["file"])
     w.writeheader()
     w.writerows(rows)
-summary = {"applied": a.apply, "orders_looked_at": len(rows),
+summary = {"applied": a.apply, "mode": mode.strip() or "queue", "orders_looked_at": len(rows),
            "by_kind": {f"{k} {v}": n for (k, v), n in sorted(Counter((r["kind"] or "other", r["result"]) for r in rows).items())},
            "backfill_clear": sum(1 for r in rows if r["backfill"] and r["result"] != "stays"),
            "results": dict(why_not.most_common()), "blocking_checks_top": dict(block_flags.most_common(15)),
