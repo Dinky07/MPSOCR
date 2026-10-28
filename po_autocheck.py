@@ -46,6 +46,20 @@ BLOCKING_DIFF = lambda d: d in ("Supplier", "Job") or d.startswith("lines ")
 SUP_FLAG = re.compile(r"file name says supplier|supplier read as|supplier not read|matched to", re.I)
 
 
+# Dino 28 Oct 17:07: a job the reader moved from elsewhere on the form (written beside the order number = the
+# other-reference box, or an allocation like NLE taken as job NE) is settled when it is a real Sage job and the
+# buying spreadsheet doesn't give a different one
+JOB_FLAG = re.compile(r"\bjob \S+ taken from the other-reference box|allocation read as .+: taken as job", re.I)
+SAGE_JOBS = set()
+try:
+    import csv as _csv
+    for _r in _csv.DictReader(open(ROOT / "jobs_sage.csv", encoding="utf-8-sig")):
+        if _r.get("JobNumber"):
+            SAGE_JOBS.add(re.sub(r"\s", "", _r["JobNumber"]).upper())
+except Exception:
+    pass
+
+
 def file_supplier(flags, f, sc):
     for x in flags:
         m = re.search(r"file name says supplier (.+?)\s*$", str(x), re.I)
@@ -159,7 +173,11 @@ for t in ("PurchaseOrders", "PolymerOrders"):
         reg = PD.pick(regs.get(key) or [], f) if key else None
         fsup, ssup = file_supplier(flags, f, sc), (reg or {}).get("supplier")
         sup_ok = bool(reg is not None and fsup and ssup and PD.same("supplier", fsup, ssup))
-        blocking = [x for x in flags if not ok_flag(x) and not (sup_ok and SUP_FLAG.search(x))]
+        status0, diffs0, _h, _l = PD.compare(f, reg)
+        job_ok = bool(reg is not None and "Job" not in diffs0
+                      and re.sub(r"\s", "", str(f.get("job_number") or "")).upper() in SAGE_JOBS)
+        blocking = [x for x in flags if not ok_flag(x) and not (sup_ok and SUP_FLAG.search(x))
+                    and not (job_ok and JOB_FLAG.search(x))]
         if not why and blocking and not f.get("checked"):
             why = "review checks"
             for x in blocking:
@@ -178,6 +196,8 @@ for t in ("PurchaseOrders", "PolymerOrders"):
                                 "auto: spreadsheet" if reg is not None else "auto: reader only")
         if how == "auto: spreadsheet" and sup_ok and [x for x in flags if SUP_FLAG.search(x)]:
             how = "auto: spreadsheet (supplier: file name + spreadsheet)"
+        if how and how.startswith("auto: spreadsheet") and job_ok and [x for x in flags if JOB_FLAG.search(x)]:
+            how += " (job: Sage job, spreadsheet agrees)"
         if date_only:
             how, why = "released unchecked (date from spreadsheet)", None
         why_not[why or how] += 1
@@ -233,8 +253,10 @@ for t in ("PurchaseOrders", "PolymerOrders"):
                 f["checked"] = True
                 f["checks"] = [c for c in (f.get("checks") or []) if not ok_flag(c)]
                 f["review"] = "; ".join(f["checks"]) or None
-                sc["flags"] = [x for x in (sc.get("flags") or []) if not ok_flag(x) and not (sup_ok and SUP_FLAG.search(str(x)))]
-                f["checks"] = [c for c in (f.get("checks") or []) if not (sup_ok and SUP_FLAG.search(str(c)))]
+                sc["flags"] = [x for x in (sc.get("flags") or []) if not ok_flag(x) and not (sup_ok and SUP_FLAG.search(str(x)))
+                               and not (job_ok and JOB_FLAG.search(str(x)))]
+                f["checks"] = [c for c in (f.get("checks") or []) if not (sup_ok and SUP_FLAG.search(str(c)))
+                               and not (job_ok and JOB_FLAG.search(str(c)))]
                 f["review"] = "; ".join(f["checks"]) or None
                 sc["needs_review"] = bool(sc["flags"])
                 sc["checked_at"], sc["checked_how"] = stamp, how
