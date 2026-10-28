@@ -1,0 +1,148 @@
+{
+ "od_new_since": "2026-10-28T14:15:00",
+ "rules": [
+  {
+   "name": "MPS sales invoice",
+   "action": "remove",
+   "queues": [
+    "SupplierInvoices",
+    "SupplierInvoicesArchive",
+    "PurchaseOrders",
+    "PolymerOrders",
+    "ProofOfPayments"
+   ],
+   "head": "MINING\\s+PRESSURE\\s+SYSTEMS|KUSASA\\s+PRESSURE",
+   "all": [
+    "TAX\\s+INVOICE",
+    "\\bIN\\s?\\d{5,7}\\b"
+   ],
+   "confirm": "Is this a tax invoice ISSUED BY Mining Pressure Systems or Kusasa Pressure Systems as the SELLER (their own name and logo at the top as the company invoicing)? Answer only yes or no.",
+   "why": "MPS's own sales invoice: can be reprinted from Sage"
+  },
+  {
+   "name": "Sage sales order",
+   "action": "remove",
+   "all": [
+    "SALES\\s+ORDER\\s+FILE\\s+COPY"
+   ],
+   "why": "Sales order file copy (Polymer / MPS): the order is in Sage"
+  },
+  {
+   "name": "Bank confirmation letter",
+   "action": "remove",
+   "any": [
+    "CONFIRMATION\\s+OF\\s+BANK",
+    "BANK\\s+CONFIRMATION\\s+LETTER",
+    "THIS\\s+LETTER\\s+(SERVES\\s+TO\\s+)?CONFIRMS?\\b.{0,80}\\bACCOUNT",
+    "ACCOUNT\\s+CONFIRMATION\\s+LETTER"
+   ],
+   "none": [
+    "TAX\\s+INVOICE"
+   ],
+   "confirm": "Is this a letter from a bank confirming someone's bank account details? Answer only yes or no.",
+   "why": "bank confirmation letter: not needed"
+  },
+  {
+   "name": "Supplier invoice to Polymer",
+   "action": "remove",
+   "queues": [
+    "SupplierInvoices",
+    "SupplierInvoicesArchive",
+    "PurchaseOrders",
+    "PolymerOrders",
+    "ProofOfPayments"
+   ],
+   "all": [
+    "\\bINVOICE\\b",
+    "POLYMER\\s+(LINERS|LINING)"
+   ],
+   "none": [
+    "MINING\\s+PRESSURE\\s+SYSTEMS",
+    "PRO\\s*-?\\s*FORMA",
+    "QUOTATION"
+   ],
+   "confirm": "Is this an invoice addressed TO Polymer Liners / Polymer Lining Systems as the customer being billed? Answer only yes or no.",
+   "why": "supplier invoice made out to Polymer Lining Systems: not MPS's"
+  },
+  {
+   "name": "Test cert marked SAMPLE",
+   "action": "remove",
+   "queues": [
+    "PurchaseOrders",
+    "PolymerOrders",
+    "ProofOfPayments",
+    "SupplierInvoices"
+   ],
+   "all": [
+    "\\bSAMPLE\\b",
+    "TEST\\s+CERTIFICATE|MILL\\s+TEST|INSPECTION\\s+CERTIFICATE|EN\\s*10204|CHEMICAL\\s+COMPOSITION"
+   ],
+   "confirm": "Is the word SAMPLE stamped, typed large or written ACROSS this page as a mark on the document (not just a column heading such as 'Sample No' or 'Sample position' in a table)? Answer only yes or no.",
+   "why": "test certificate marked SAMPLE: not imported"
+  },
+  {
+   "name": "Sales quotation",
+   "action": "quotes",
+   "queues": [
+    "PurchaseOrders",
+    "PolymerOrders",
+    "SupplierInvoices",
+    "ProofOfPayments"
+   ],
+   "file": "QUOTE\\s+APPROVAL|MPSHQ|_QP_",
+   "head_or": "KUSASA\\s+PRESSURE|MINING\\s+PRESSURE\\s+SYSTEMS",
+   "all_or": [
+    "QUOTATION|QUOTE\\s*#|QUOTE\\s+NO"
+   ],
+   "confirm": "Is this a quotation ISSUED BY Mining Pressure Systems or Kusasa Pressure Systems (their letterhead at the top, quoting prices to a customer)? Answer only yes or no.",
+   "why": "sales quotation by MPS / Kusasa: Quotes library"
+  },
+  {
+   "name": "Saheti",
+   "action": "other_documents",
+   "category": "Saheti",
+   "any": [
+    "\\bSAHETI\\b"
+   ]
+  },
+  {
+   "name": "Alenti",
+   "action": "other_documents",
+   "category": "Alenti",
+   "any": [
+    "\\bALENTI\\b"
+   ]
+  },
+  {
+   "name": "SARS",
+   "action": "other_documents",
+   "category": "SARS",
+   "any": [
+    "SOUTH\\s+AFRICAN\\s+REVENUE\\s+SERVICE",
+    "\\bSARS\\b",
+    "\\beFILING\\b"
+   ]
+  },
+  {
+   "name": "COD",
+   "action": "tag",
+   "field": "cod",
+   "orders_only": true,
+   "any": [
+    "\\bC\\s?[.,]\\s?[O0]\\s?[.,]\\s?D\\b",
+    "CASH\\s+ON\\s+DELIVERY"
+   ],
+   "vision": "Is there a C.O.D stamp (cash on delivery), or the words C.O.D / CASH ON DELIVERY stamped or written, on this order form? Answer only yes or no."
+  },
+  {
+   "name": "Cancelled",
+   "action": "tag",
+   "field": "cancelled",
+   "orders_only": true,
+   "any": [
+    "\\bCANCELL?ED\\b"
+   ],
+   "confirm": "Is this order marked, stamped or written across as CANCELLED? Answer only yes or no."
+  }
+ ]
+}
