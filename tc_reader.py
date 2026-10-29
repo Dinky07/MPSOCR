@@ -456,6 +456,11 @@ def copied_from_example(answer, fewshot_dir, family=None, source_name=""):
 
 
 def parse_answer(raw):
+    import ci_keys                         # keys differing only in case ("Ce"/"CE") break the PC sync (29 Oct)
+    return ci_keys.dedupe(_parse_answer(raw))
+
+
+def _parse_answer(raw):
     if po_reader:
         return po_reader.parse_answer(raw)
     m = re.search(r"\{.*\}", raw, re.S)
