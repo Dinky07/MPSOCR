@@ -60,6 +60,30 @@ def supplier_vocab():
     return _VOCAB
 
 
+_RULES, _RULES_KEY = [], None
+
+
+def supplier_rule(name):
+    """supplier_rules.json beside this module: [{"match": regex, "name": supplier, "why": ...}] -> (name, why) or None."""
+    global _RULES, _RULES_KEY
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "supplier_rules.json")
+    try:
+        key = os.path.getmtime(path)
+    except OSError:
+        return None
+    if key != _RULES_KEY:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                _RULES = [(re.compile(r["match"], re.I), r["name"], r.get("why", "")) for r in json.load(fh).get("rules", [])]
+        except (OSError, ValueError, KeyError, re.error):
+            _RULES = []
+        _RULES_KEY = key
+    for rx, n, why in _RULES:
+        if rx.search(str(name or "")):
+            return n, why
+    return None
+
+
 def snap_supplier(name, polymer=False):
     """A misread supplier ('G STONELOR') -> the known name it clearly is ('STONCOR'), or None. Clearly = similar enough and
     well ahead of the next candidate; Polymer orders try Polymer's own suppliers first."""
@@ -293,7 +317,15 @@ def tidy(d, rel, source_folder=None, source_pdf=None, source_modified=None, sour
         elif not (k1 in k2 or k2 in k1):
             chk.append(f"file name says supplier {fsup}")
         d["supplier_file"] = fsup
-    if d["supplier"]:
+    rule = supplier_rule(d["supplier"]) if d["supplier"] else None
+    if rule:
+        if d["supplier"] != rule[0]:
+            d["supplier_read"], d["supplier"] = d["supplier"], rule[0]
+        d["supplier_rule"] = rule[1]
+        kr = re.sub(r"[^A-Z0-9]", "", rule[0].upper())
+        if fsup and (re.sub(r"[^A-Z0-9]", "", fsup) in kr or kr in re.sub(r"[^A-Z0-9]", "", fsup)):
+            chk[:] = [c for c in chk if c != f"file name says supplier {fsup}"]
+    if d["supplier"] and not rule:
         known = snap_supplier(d["supplier"], form == "polymer_order" or str(d.get("order_number") or "").upper().startswith("PL"))
         if known:
             chk.append(f"supplier read as {d['supplier']}, matched to {known}")

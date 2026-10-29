@@ -1,0 +1,6 @@
+{
+ "_about": "Supplier rules (po_reader): a reading that matches 'match' (regex, case-insensitive, on the supplier as read) is that supplier. Checked before the vocabulary snap. Add a rule per line; reloaded when this file changes.",
+ "rules": [
+  {"match": "^\\s*S\\W?M\\W?S\\W*F", "name": "SMS FLANGES", "why": "Dino 29 Oct: every SMS F... reading (SMS Furness, SMS Furnaces, SMS FUMOS, SMS Francis, SMS FAULTS...) is SMS Flanges"}
+ ]
+}
