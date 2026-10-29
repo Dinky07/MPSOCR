@@ -98,6 +98,23 @@
    "why": "sales quotation by MPS / Kusasa: Quotes library"
   },
   {
+   "name": "Cartrack contract",
+   "action": "other_documents",
+   "category": "Cartrack",
+   "any_age": true,
+   "any": [
+    "\\bCAR\\s?TRACK\\b"
+   ],
+   "all": [
+    "CONTRACT|AGREEMENT|CANCELL?ATION|CANCELL?ED|SUBSCRIPTION|DEBIT\\s+ORDER|APPLICATION\\s+FORM"
+   ],
+   "none": [
+    "TAX\\s+INVOICE",
+    "\\bSTATEMENT\\s+OF\\s+ACCOUNT\\b",
+    "\\bCREDIT\\s+NOTE\\b"
+   ]
+  },
+  {
    "name": "Letter",
    "action": "other_documents",
    "category": "Letter",
