@@ -1,0 +1,9 @@
+[Unit]
+Description=MPS supplier VAT fill (Dino 29 Oct): VAT numbers the reader missed, from the page text / Sage / earlier invoices
+[Service]
+Type=oneshot
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/vat_fill.py --apply --jobs 2
+TimeoutStartSec=40min

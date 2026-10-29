@@ -1,0 +1,7 @@
+[Unit]
+Description=MPS supplier VAT fill every hour at :40
+[Timer]
+OnCalendar=*:40
+Persistent=false
+[Install]
+WantedBy=timers.target
