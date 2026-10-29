@@ -116,7 +116,7 @@
    "from": "Cartrack",
    "doc_types": [
     [
-     "CANCELL?ATION|CANCELL?ED|TERMINAT(E|ION)",
+     "CANCELL?ATION\\s+FORM|CANCELL?ATION\\s+OF\\s+(THE\\s+)?(CONTRACT|AGREEMENT|SERVICE)|REQUEST\\s+(TO|FOR)\\s+CANCEL|NOTICE\\s+OF\\s+(CANCELL?ATION|TERMINATION)|TERMINATION\\s+NOTICE",
      "Contract cancellation"
     ],
     [
@@ -143,7 +143,7 @@
    "confirm": "Is this document a contract or agreement, or a form cancelling a contract or agreement (NOT an invoice, quotation, purchase order, delivery note or statement)? Answer only yes or no.",
    "doc_types": [
     [
-     "CANCELL?ATION|CANCELL?ED|TERMINAT(E|ION)",
+     "CANCELL?ATION\\s+FORM|CANCELL?ATION\\s+OF\\s+(THE\\s+)?(CONTRACT|AGREEMENT|SERVICE)|REQUEST\\s+(TO|FOR)\\s+CANCEL|NOTICE\\s+OF\\s+(CANCELL?ATION|TERMINATION)|TERMINATION\\s+NOTICE",
      "Contract cancellation"
     ],
     [
