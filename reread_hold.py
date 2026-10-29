@@ -92,6 +92,8 @@ def candidates(done):
             except (OSError, ValueError):
                 continue
             f = sc.get("fields") or {}
+            if sc.get("merged"):
+                continue                                 # put back together from its pages: re-reading would split it again
             if sc.get("doc_type") != "po" or f.get("form") not in ORDER_FORMS or not f.get("order_number"):
                 continue
             if f.get("checked") or human_edits(sc) or Path(str(js) + ".uploaded").exists() or age < 600:

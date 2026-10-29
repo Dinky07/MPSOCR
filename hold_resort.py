@@ -93,7 +93,8 @@ def run(a):
             except Exception:
                 continue
             f = sc.get("fields") or {}
-            if (f.get("form") in ORDER_FORMS and f.get("order_number")) or f.get("checked") or Path(str(js) + ".uploaded").exists():
+            if (f.get("form") in ORDER_FORMS and f.get("order_number")) or f.get("checked") or Path(str(js) + ".uploaded").exists() \
+                    or sc.get("merged"):
                 continue
             pdf = js.parent / str(sc.get("file") or "")
             if pdf.is_file():
