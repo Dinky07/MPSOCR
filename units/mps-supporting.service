@@ -1,0 +1,9 @@
+[Unit]
+Description=MPS supporting pages (Dino 29 Oct): record pages behind orders, read them at night, match them with their own-channel documents
+[Service]
+Type=oneshot
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/supporting.py tick
+TimeoutStartSec=50min

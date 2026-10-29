@@ -1,0 +1,7 @@
+[Unit]
+Description=MPS supporting pages every 15 min (reads only in the night window, checked by the script)
+[Timer]
+OnCalendar=*:7/15
+Persistent=false
+[Install]
+WantedBy=timers.target

@@ -1034,6 +1034,18 @@ class Worker:
             flags.append("missing_supplier")
         return fields, flags
 
+    def save_supporting(self, staged, folder, meta):
+        """The reading of a supporting page (fed by supporting.py) to work/supporting/results/<scan>_p<page>.json."""
+        s = meta["supporting_of"]
+        d = self.root / "work" / "supporting" / "results"
+        d.mkdir(parents=True, exist_ok=True)
+        docs = [{"page": e[0], "doc_type": e[8].get("doc_type") or self.types[folder].get("doc_type"), "fields": e[2],
+                 "flags": e[3], "extractor": e[5]} for e in staged]
+        rec = {"supporting_of": s, "type": folder, "read_at": now_iso(), "docs": docs}
+        atomic_write_json(d / f"{str(s.get('source_sha'))[:16]}_p{int(s.get('source_page') or 0):03d}.json", rec)
+        log.info("%s supporting page %s p%s (behind %s) read: %d result(s), not published", folder, str(s.get("source_sha"))[:12],
+                 s.get("source_page"), s.get("order") or s.get("parent"), len(docs))
+
     def group_pages(self, staged, folder, src, work, meta, digest, td, outputs):
         """One file = one document (Dino 29 Oct 2026). staged: one entry per page of a split file. Returns the documents
         to publish: each order form with its supporting pages (one PDF, order page first), or - no order form - the
@@ -1363,6 +1375,9 @@ class Worker:
                              f" [prompt {tm.get('prompt_tokens')} tok {tm.get('prompt_eval_ms')} ms, answer {tm.get('eval_tokens')} tok {tm.get('eval_ms')} ms]" if tm else "",
                              flags)
 
+                if meta.get("supporting_of"):     # a supporting page read for its data only (supporting.py): not published
+                    self.save_supporting(staged, folder, meta)
+                    staged = []
                 if grouping and staged:
                     staged = self.group_pages(staged, folder, src, work, meta, digest, Path(td), outputs)
                 # all pages extracted: now publish to out/ (pdf first, json last)
