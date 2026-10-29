@@ -112,6 +112,44 @@
     "TAX\\s+INVOICE",
     "\\bSTATEMENT\\s+OF\\s+ACCOUNT\\b",
     "\\bCREDIT\\s+NOTE\\b"
+   ],
+   "from": "Cartrack",
+   "doc_types": [
+    [
+     "CANCELL?ATION|CANCELL?ED|TERMINAT(E|ION)",
+     "Contract cancellation"
+    ],
+    [
+     ".",
+     "Contract"
+    ]
+   ]
+  },
+  {
+   "name": "Contract",
+   "action": "other_documents",
+   "category": "Contracts",
+   "any_age": true,
+   "head": "\\bCONTRACT\\b|\\bCANCELL?ATION\\s+(FORM|OF\\s+(CONTRACT|AGREEMENT|SERVICE))\\b|\\b(SERVICE|RENTAL|LEASE|MAINTENANCE|SUBSCRIPTION|MASTER|SUPPLY)\\s+AGREEMENT\\b",
+   "none": [
+    "TAX\\s+INVOICE",
+    "\\bQUOTATION\\b",
+    "\\bPRO\\s?-?FORMA\\b",
+    "\\bCREDIT\\s+NOTE\\b",
+    "\\bSTATEMENT\\s+OF\\s+ACCOUNT\\b",
+    "TEST\\s+CERTIFICATE|MILL\\s+TEST|EN\\s*10204|INSPECTION\\s+CERTIFICATE|CHEMICAL\\s+COMPOSITION",
+    "DELIVERY\\s+NOTE"
+   ],
+   "confirm": "Is this document a contract or agreement, or a form cancelling a contract or agreement (NOT an invoice, quotation, purchase order, delivery note or statement)? Answer only yes or no.",
+   "doc_types": [
+    [
+     "CANCELL?ATION|CANCELL?ED|TERMINAT(E|ION)",
+     "Contract cancellation"
+    ],
+    [
+     ".",
+     "Contract"
+    ]
    ]
   },
   {

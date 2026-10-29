@@ -386,7 +386,8 @@ def main():
                             result = "quotes -> " + move_out(js, sc, "SalesQuotes", q, stamp, r["name"])
                         elif r["action"] == "other_documents":
                             s = od_sort.summarise(pdf, text, vcfg)
-                            fields = {"summary": s.get("summary"), "od_doc_type": s.get("doc_type"), "od_from": s.get("from"),
+                            dt = next((lab for rx, lab in (r.get("doc_types") or []) if re.search(rx, text, re.I | re.S)), None)
+                            fields = {"summary": s.get("summary"), "od_doc_type": dt or s.get("doc_type"), "od_from": r.get("from") or s.get("from"),
                                       "date": s.get("date"), "order_number": s.get("order_number"), "job_number": s.get("job_number"),
                                       "od_category": r.get("category", "Other"), "od_rule": r["name"], "od_evidence": ev[:250],
                                       "moved_from": f"{t} ({where})", "content_hash": f.get("content_hash") or od_sort.file_hash(pdf).upper(),
