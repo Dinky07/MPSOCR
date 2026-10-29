@@ -263,6 +263,30 @@ def remove(js, sc, t, why, stamp):
                                                                "source_file": sc.get("source_file"), "by": "route_sort"}), encoding="utf-8")
 
 
+def remember_no(js, rule, question):
+    """The model said no to a rule's confirm question: kept in the sidecar (fields.route_not_confirmed, "<rule>#<question
+    hash>") so later runs don't ask again; a changed question is asked afresh (332: ~90 repeat questions an hour)."""
+    key = f"{rule}#{hashlib.sha1(question.encode()).hexdigest()[:8]}"
+    try:
+        with sidecar_lock.locked(js, "route_sort"):
+            sc = json.load(open(js, encoding="utf-8"))
+            f = sc.setdefault("fields", {})
+            seen = list(f.get("route_not_confirmed") or [])
+            if key in seen:
+                return
+            f["route_not_confirmed"] = seen + [key]
+            tmp = js.with_name(js.name + ".rs.tmp")
+            tmp.write_text(json.dumps(sc, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+            os.replace(tmp, js)
+    except sidecar_lock.Locked:
+        pass
+
+
+def said_no(f, r):
+    q = r.get("confirm") or ""
+    return bool(q) and f"{r['name']}#{hashlib.sha1(q.encode()).hexdigest()[:8]}" in (f.get("route_not_confirmed") or [])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
@@ -316,6 +340,8 @@ def main():
             if a.rule and r["name"] not in a.rule.split(","):
                 continue
             r["_t"] = t
+            if said_no(f, r):
+                continue                                    # the model already said no to this rule here (332)
             if r["action"] == "tag":
                 if not is_order or f.get(r["field"]) is True:
                     continue
@@ -356,6 +382,8 @@ def main():
                 try:
                     if not ask_yes_no(pdf, r["confirm"], vcfg):
                         res[f"{r['name']}: not confirmed by the model"] += 1
+                        if a.apply:
+                            remember_no(js, r["name"], r["confirm"])
                         continue
                 except Exception as e:
                     res[f"{r['name']}: model not reached"] += 1

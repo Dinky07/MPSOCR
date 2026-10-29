@@ -1,0 +1,21 @@
+[Unit]
+Description=MPS OCR pipeline CPU lane (delivery notes + the CPU pass of supplier invoices, beside the GPU worker)
+After=network-online.target mps-ocr-worker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dinoc
+Group=dinoc
+Environment=MPS_OCR_CONFIG=/srv/ocr/pipeline/config.json
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/worker.py --lane cpu
+Restart=always
+RestartSec=10
+# SIGTERM lets the current file finish; the file goes back into the queue
+TimeoutStopSec=120
+KillMode=mixed
+UMask=0002
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

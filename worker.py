@@ -81,6 +81,19 @@ class OllamaDown(Exception):
     pass
 
 
+class PageReadFailed(Exception):
+    """One page could not be read, even after the retry without worked examples (332): it is held, the file's other
+    pages are kept."""
+
+
+def http_error_text(e):
+    try:
+        b = e.read().decode("utf-8", "replace")
+        return str(json.loads(b).get("error") or b)[:200]
+    except Exception:
+        return str(getattr(e, "reason", e))[:200]
+
+
 class GpuUnavailable(Exception):
     """Needs the GPU but it's paused or Ollama is down: the file waits in the queue, CPU work carries on."""
 
@@ -494,12 +507,20 @@ def extract_command(doc_type, path, cfg, tcfg):
 
 # --------------------------------------------------------------------------- worker
 class Worker:
-    def __init__(self, cfg):
+    def __init__(self, cfg, lane="all"):
         self.cfg = cfg
+        self.lane = lane             # "all", or "cpu": delivery notes + the CPU pass of CPU-first invoices (332)
         self.root = Path(cfg["root"])
         self.types = cfg["doc_types"]          # folder name -> settings
         self.db = sqlite3.connect(cfg.get("state_db", "/srv/ocr/pipeline/state.db"), timeout=30)
-        self.db.execute("PRAGMA journal_mode=WAL")      # shared with the NAS collector
+        for i in range(30):      # 332: two worker lanes may start together; the journal-mode check needs the db briefly
+            try:
+                self.db.execute("PRAGMA journal_mode=WAL")      # shared with the NAS collector
+                break
+            except sqlite3.OperationalError as e:
+                if "locked" not in str(e) or i == 29:
+                    raise
+                time.sleep(1)
         self.db.execute("""CREATE TABLE IF NOT EXISTS processed(
             sha256 TEXT PRIMARY KEY, folder TEXT, source TEXT, status TEXT, outputs TEXT, at TEXT)""")
         self.db.execute("""CREATE TABLE IF NOT EXISTS extractions(
@@ -521,6 +542,8 @@ class Worker:
                 break
         self.status = {"current": None, "last_done": None, "last_error": None}
         self.last_folder = None      # the queue the last document came from: the worker stays on it while it has files
+        self._run = 0                # documents in a row from last_folder (config queue_batch, 332)
+        self._ahead = {}             # in/ path -> (size, mtime), presort future started early (332)
         self.loaded = ([], 0.0)      # (models Ollama has in memory, when that was checked)
         mps_jobs.JOBS_DIR = str(self.root)            # jobs_*.csv, sage_invoices.csv, orders_index.csv, scan_times.csv
         if po_reader:      # supplier names confirmed on checked orders (training.py) are used to correct misreadings
@@ -543,8 +566,12 @@ class Worker:
 
     def recover_work(self):
         """Anything left in work/ after a crash or reboot goes back to its in/ folder."""
+        mine = "cpu~" if self.lane == "cpu" else ""          # each lane takes back only its own files (332)
         for p in (self.root / "work").glob("*__*"):
             folder, _, name = p.name.partition("__")
+            if folder.startswith("cpu~") != bool(mine):
+                continue
+            folder = folder[len(mine):]
             if folder in self.types:
                 log.info("recovering %s", p.name)
                 move(p, self.root / "in" / folder, name)
@@ -565,6 +592,94 @@ class Worker:
             except Exception as e:
                 log.warning("supplier list reload failed: %s", e)
 
+    def lane_wants(self, folder, p):
+        """Which worker takes a file (332). Without config "cpu_lane" one worker takes everything, as before. With it,
+        `worker.py --lane cpu` takes delivery notes and the CPU pass of CPU-first invoices; an invoice that pass rejects
+        gets a <file>.cpu.json note in _meta and stays queued for the main worker, which reads only noted invoices (on
+        the GPU, with the saved OCR text) and no delivery notes."""
+        if not self.cfg.get("cpu_lane"):
+            return True
+        t = self.types[folder]
+        dn = t.get("doc_type") == "delivery_note"
+        if not t.get("cpu_first"):
+            return dn if self.lane == "cpu" else not dn
+        noted = self.cpu_note(folder, p.name).exists()
+        return (not noted) if self.lane == "cpu" else noted
+
+    def cpu_note(self, folder, name):
+        return self.root / "in" / folder / "_meta" / (name + ".cpu.json")
+
+    def write_cpu_note(self, folder, name, digest):
+        """The CPU lane's rejected pass, for the GPU worker (written before the file goes back to in/)."""
+        for key in [k for k in self.cpu_cache if k.startswith(digest + ":")]:
+            fields, reasons, text, text_src = self.cpu_cache.pop(key)
+            p = self.cpu_note(folder, name)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(p, json.loads(json.dumps({"key": key, "fields": fields, "reasons": reasons, "text": text,
+                                                        "text_src": text_src, "at": now_iso()}, default=str)))
+
+    def read_page(self, fn, fewshot, extra):
+        """fn(fewshot_dir) reads one page. An Ollama 5xx (29 Oct: "prediction aborted, token repeat limit reached" - the
+        model loops on some pages when shown the worked examples) is read once more without them; a page that still
+        fails, or times out, raises PageReadFailed so the file's other pages are kept (332)."""
+        try:
+            try:
+                return fn(fewshot)
+            except urllib.error.HTTPError as e:
+                if e.code < 500 or not fewshot:
+                    raise
+                why = http_error_text(e)
+                log.warning("Ollama HTTP %s (%s): reading the page again without worked examples", e.code, why)
+                extra["retried_without_examples"] = f"HTTP {e.code}: {why}"
+                return fn(None)
+        except urllib.error.HTTPError as e:
+            raise PageReadFailed(f"HTTP {e.code}: {http_error_text(e)}")
+        except TimeoutError as e:
+            raise PageReadFailed(f"timed out ({e})")
+        except (urllib.error.URLError, ConnectionError) as e:
+            if not ollama_up(self.cfg):
+                raise OllamaDown(str(e))
+            raise PageReadFailed(str(e)[:200])
+
+    def presort_ahead(self, folder, src):
+        """Starts the presort of the file this queue will most likely give the worker next (its oldest other file), so
+        that file's Tesseract pass runs on the CPU while the GPU reads this one (332: ~3 s of GPU idle per order page
+        before). Single-page files only: split files prefetch their own pages."""
+        if not presort:
+            return
+        for p in [p for p in self._ahead if not p.exists()]:
+            self._ahead.pop(p, None)
+        if len(self._ahead) >= 2:
+            return
+        try:
+            nxt = min((p for p in (self.root / "in" / folder).iterdir() if p.is_file() and p != src
+                       and p.suffix.lower() == ".pdf" and not IGNORE.search(p.name) and p not in self._ahead),
+                      key=lambda p: p.stat().st_mtime, default=None)
+            if nxt is None or int(re.search(r"Pages:\s+(\d+)", run(["pdfinfo", str(nxt)], 30)).group(1)) != 1:
+                return
+            st = nxt.stat()
+        except Exception:
+            return
+        meta = read_json_file(self.root / "in" / folder / "_meta" / (nxt.name + ".json")) or {}
+        fut = self.presort_start(nxt, meta, nxt)
+        if fut:
+            self._ahead[nxt] = ((st.st_size, st.st_mtime), fut)
+
+    def take_ahead(self, src):
+        """The presort started early for this file, once finished (it reads the in/ path, which is about to move)."""
+        got = self._ahead.pop(src, None)
+        if not got:
+            return None
+        sig, fut = got
+        try:
+            st = src.stat()
+            if sig != (st.st_size, st.st_mtime):
+                return None
+            fut.result(timeout=120)
+        except Exception:
+            return None
+        return fut
+
     def paused(self):
         return (self.root / "PAUSE").exists()
 
@@ -579,7 +694,7 @@ class Worker:
                   types_off=[f for f in self.types if self.type_off(f)], pid=os.getpid(),
                   waiting_for_gpu=len(self.deferred))
         try:
-            atomic_write_json(self.root / "status.json", st)
+            atomic_write_json(self.root / ("status_cpu.json" if self.lane == "cpu" else "status.json"), st)
         except OSError as e:
             log.warning("status write failed: %s", e)
 
@@ -714,6 +829,8 @@ class Worker:
             for p in (self.root / "in" / folder).iterdir():
                 if not p.is_file() or IGNORE.search(p.name) or (not gpu_ok and p in self.deferred):
                     continue
+                if not self.lane_wants(folder, p):
+                    continue
                 if p.suffix.lower() not in ACCEPT:
                     log.warning("unsupported file type, moving to failed: %s", p)
                     self.fail(folder, p, f"unsupported file type {p.suffix}")
@@ -732,7 +849,14 @@ class Worker:
         gpu_folders = [f for f in ready if f not in cpu_folders]
         group = None
         if gpu_folders:
-            if self.last_folder in gpu_folders:
+            # the worker stays on the queue it last read from - but after queue_batch documents in a row, a queue read
+            # with the SAME model that has files waiting gets its turn (332: 9 Ronin JTs waited behind 1,660 orders;
+            # moving between qwen2.5vl queues costs no model load)
+            same = [f for f in gpu_folders if f != self.last_folder and self.queue_model(f) == self.queue_model(self.last_folder)] \
+                if self.last_folder in gpu_folders else []
+            if same and self._run >= int(self.cfg.get("queue_batch", 10)):
+                group = min(same, key=lambda f: min(ready[f]))
+            elif self.last_folder in gpu_folders:
                 group = self.last_folder
             else:
                 loaded = set(self.models_loaded()) if gpu_ok else set()
@@ -977,6 +1101,8 @@ class Worker:
           [{"order_number": "^A\\d{5}$"}, {"form": "^internal_group_transfer$", "order_number": "^\\d{5}$"}]
         = an MPS order with its A-number, or an IGT with its 5-digit number; a quote approval, an attached page or an
         order whose number was not read is held."""
+        if fields.get("read_error"):                    # 332: the page failed even after the retry
+            return "page could not be read: " + str(fields["read_error"])[:150]
         if doc_type == "test_cert":
             if "not_a_test_cert" in flags:
                 return "no test certificate page found"
@@ -1182,9 +1308,11 @@ class Worker:
 
         meta_path = self.root / "in" / folder / "_meta" / (src.name + ".json")      # optional: {"source_folder": ...}
         meta = read_json_file(meta_path) or {}
+        self._run = (self._run + 1) if self.last_folder == folder else 1
         self.last_folder = folder
         loaded_before = self.models_loaded(max_age=0) if gpu_ok and self.queue_model(folder) else []
-        work = move(src, self.root / "work", f"{folder}__{src.name}")
+        ahead_fut = self.take_ahead(src)          # presort started while the GPU read the file before (332)
+        work = move(src, self.root / "work", f"{'cpu~' if self.lane == 'cpu' else ''}{folder}__{src.name}")
         self.status["current"] = {"file": src.name, "type": folder, "started": now_iso()}
         self.write_status(True)
         outputs = []
@@ -1231,6 +1359,10 @@ class Worker:
                     if tcfg.get("cpu_first"):
                         key = f"{digest}:{page}"
                         if key not in self.cpu_cache:
+                            n = read_json_file(self.cpu_note(folder, src.name)) or {}
+                            if n.get("key") == key:          # the CPU lane's pass (332): no second Tesseract run here
+                                self.cpu_cache[key] = (n.get("fields"), n.get("reasons") or [], n.get("text") or "", n.get("text_src"))
+                        if key not in self.cpu_cache:
                             try:
                                 self.cpu_cache[key] = cpu_invoice.extract(
                                     part, self.suppliers, parse_date, tcfg.get("cpu", {}),
@@ -1255,14 +1387,17 @@ class Worker:
                     elif doc_type == "jt" and jt_reader and tcfg.get("jt_reader", True) is not False:
                         jc = self.jt_settings(folder)
                         try:
-                            ans, npages, _ = jt_reader.read(part, self.cfg["ollama_url"], jc["model"], jc["fewshot_dir"], int(jc["px"]),
-                                                            int(self.cfg.get("ollama_timeout", 900)), self.cfg.get("keep_alive", "15m"),
-                                                            prompt=jc.get("prompt"))
-                        except (urllib.error.URLError, ConnectionError) as e:
-                            if not ollama_up(self.cfg):
-                                raise OllamaDown(str(e))
-                            raise
-                        raw = jt_reader.to_worker(ans, jc.get("number_prefix"))
+                            ans, npages, _ = self.read_page(lambda fs: jt_reader.read(
+                                part, self.cfg["ollama_url"], jc["model"], fs, int(jc["px"]),
+                                int(self.cfg.get("ollama_timeout", 900)), self.cfg.get("keep_alive", "15m"),
+                                prompt=jc.get("prompt")), jc["fewshot_dir"], extra)
+                            raw = jt_reader.to_worker(ans, jc.get("number_prefix"))
+                        except PageReadFailed as e:
+                            log.warning("%s %s%s could not be read (%s): held, the file's other pages are kept",
+                                        folder, src.name, f" p{page}" if page else "", e)
+                            ans, npages = {}, 1
+                            raw = {"items": [], "read_error": str(e)}
+                            extra["read_error"] = str(e)
                         if tcfg.get("company"):
                             raw["company"] = tcfg["company"]
                         extractor = "jt_v1"
@@ -1274,7 +1409,8 @@ class Worker:
                     elif doc_type == "po" and po_reader and tcfg.get("po_reader", True) is not False:
                         # proof-of-payment pages inside the file: PoP-only files become their own document (Proof of
                         # Payments library); a PO with PoP pages stays one file, Document Type gets "Proof of Payment" too
-                        presort_fut = presort_futs.get(part) or self.presort_start(part, meta, src)
+                        presort_fut = presort_futs.get(part) or (ahead_fut if len(parts) == 1 else None) \
+                            or self.presort_start(part, meta, src)
                         ptext = self.presort_collect(presort_fut, extra)   # waits for the CPU verdict (started earlier for split pages)
                         ps = extra.get("presort") or {}
                         if (tcfg.get("presort_gate", True) and ps.get("strength") == "sure" and ps.get("dest")
@@ -1285,6 +1421,8 @@ class Worker:
                                 continue
                             outputs.append(self.presort_route(part, page, ps, meta, src, folder))
                             continue
+                        if page == parts[-1][0]:
+                            self.presort_ahead(folder, src)      # the next order's Tesseract runs while the GPU reads this one
                         pop_pages, pop_texts, npdf = self.payment_pages(part, tcfg)
                         first = next((i for i in range(1, npdf + 1) if i not in pop_pages), None)
                         # "proof_of_payment": "keep" -> payment confirmations stay in this library as Document Type
@@ -1302,20 +1440,21 @@ class Worker:
                             if first is None:            # every page is a payment confirmation: no order to read
                                 raw, npages = {}, 0
                             else:
-                                raw, npages, _ = po_reader.read(
-                                    part, self.cfg["ollama_url"], pmodel,
-                                    pc.get("fewshot_dir", str(Path(__file__).resolve().with_name("po_fewshot"))),
+                                raw, npages, _ = self.read_page(lambda fs: po_reader.read(
+                                    part, self.cfg["ollama_url"], pmodel, fs,
                                     self.order_pages(first, npdf, pop_pages, int(pc.get("pages", 2))), int(pc.get("px", 1600)),
                                     int(self.cfg.get("ollama_timeout", 1200)), self.cfg.get("keep_alive", "15m"),
                                     first_page=first, source_folder=meta.get("source_folder"), source_pdf=work,
-                                    source_modified=meta.get("source_modified"), source_sha256=digest)
-                        except (urllib.error.URLError, ConnectionError) as e:
-                            if not ollama_up(self.cfg):
-                                raise OllamaDown(str(e))
-                            raise
+                                    source_modified=meta.get("source_modified"), source_sha256=digest),
+                                    pc.get("fewshot_dir", str(Path(__file__).resolve().with_name("po_fewshot"))), extra)
+                        except PageReadFailed as e:
+                            log.warning("%s %s%s could not be read (%s): held, the file's other pages are kept",
+                                        folder, src.name, f" p{page}" if page else "", e)
+                            raw, npages = {}, 1
+                            extra["read_error"] = str(e)
                         extractor = "po_v2"
                         extra["po_model"] = pmodel
-                        if getattr(po_reader, "LAST_TIMING", None):
+                        if getattr(po_reader, "LAST_TIMING", None) and not extra.get("read_error"):
                             extra["ollama"] = dict(po_reader.LAST_TIMING)     # prompt_eval / eval tokens and ms (review F22)
                         extra["po_examples"] = len(po_reader.fewshot_msgs(
                             pc.get("fewshot_dir", str(Path(__file__).resolve().with_name("po_fewshot"))))) // 2
@@ -1326,6 +1465,8 @@ class Worker:
                         extractor = "builtin"
                     if extractor == "po_v2":
                         fields, flags = po_reader.to_fields(raw)
+                        if extra.get("read_error"):
+                            fields["read_error"] = extra["read_error"]
                         if keep_pop and pop_reader:
                             if not pop_pages and npdf == 1 and "not_an_order" in flags:
                                 # the presort already OCR'd this page (review F7): no second render + Tesseract
@@ -1335,7 +1476,7 @@ class Worker:
                                     all_pop = True
                             if pop_pages:
                                 fields, flags = self.keep_pop_fields(fields, flags, pop_pages, pop_texts, all_pop, meta)
-                        if first is not None and "not_an_order" in flags and self.ws_route_ok():
+                        if first is not None and "not_an_order" in flags and self.ws_route_ok() and not extra.get("read_error"):
                             is_ws, ws_score, ws_why = ws_reader.looks_like_ws(part, meta.get("original_name") or src.name,
                                                                               text=ptext if (ptext or "").strip() else None, po_answer=raw)
                             if is_ws and grouping:
@@ -1450,12 +1591,17 @@ class Worker:
                                     (now_iso(), folder, src.name, extractor, json.dumps(extra.get("cpu_rejected", []))))
             move(work, self.root / "done" / folder / datetime.now().strftime("%Y-%m"), src.name)
             meta_path.unlink(missing_ok=True)
+            self.cpu_note(folder, src.name).unlink(missing_ok=True)
             self.db.execute("INSERT OR REPLACE INTO processed VALUES(?,?,?,?,?,?)",
                             (digest, folder, src.name, "ok", json.dumps(outputs), now_iso()))
             self.db.commit()
             self.status["last_done"] = {"file": src.name, "outputs": outputs, "at": now_iso()}
         except GpuUnavailable as e:
-            log.info("%s needs the GPU (CPU: %s); waiting while other CPU work continues", src.name, e)
+            if self.lane == "cpu":
+                self.write_cpu_note(folder, src.name, digest)
+                log.info("%s: CPU pass rejected (%s); queued for the GPU worker with its OCR text", src.name, e)
+            else:
+                log.info("%s needs the GPU (CPU: %s); waiting while other CPU work continues", src.name, e)
             back = move(work, self.root / "in" / folder, src.name)
             self.deferred.add(back)
             raise
@@ -1639,8 +1785,9 @@ class Worker:
         log.info("watching %s for %s", self.root / "in", ", ".join(self.types))
         while not _stop:
             self.reload_suppliers()
-            self.recheck_held_dns()
-            up = ollama_up(self.cfg)
+            if (self.lane == "cpu") == bool(self.cfg.get("cpu_lane")):
+                self.recheck_held_dns()               # delivery notes: done by the lane that reads them (332)
+            up = False if self.lane == "cpu" else ollama_up(self.cfg)
             gpu_ok = up and not self.paused()        # PAUSE stops GPU work; CPU-first invoices keep going
             if gpu_ok and self.deferred:
                 self.deferred.clear()
@@ -1671,7 +1818,15 @@ def main():
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
     cfg = load_config()
-    Worker(cfg).loop()
+    lane = sys.argv[sys.argv.index("--lane") + 1] if "--lane" in sys.argv[:-1] else "all"
+    if lane not in ("all", "cpu"):
+        sys.exit("--lane all|cpu")
+    if lane == "cpu" and not cfg.get("cpu_lane"):
+        log.info("--lane cpu: cpu_lane is off in config.json; idle")
+        while not _stop:
+            time.sleep(30)
+        return
+    Worker(cfg, lane).loop()
 
 
 if __name__ == "__main__":
