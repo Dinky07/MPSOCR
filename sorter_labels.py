@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Labelling sheet for the sorter (Dino 28 Oct 17:34): about 150 documents on the Purchase / Polymer Orders hold that the
+"""Labelling sheet for the sorter (Dino 28 Oct 17:34; v2 29 Oct 12:00: rebuilt from today's hold, types letter / memo /
+contract / contract_cancellation / order_acknowledgement added): about 150 documents on the Purchase / Polymer Orders hold that the
 pre-sort could not place ("unsure"), plus some it only thought "likely" (kinds not trusted to move on their own), for
 Dino to label like testset.xlsx. The labels then go into the pre-sort's rules / scoring (presort eval), and the hold is
 re-sorted once it scores well on them.
@@ -29,7 +30,12 @@ BASE_TYPES = [("purchase_order", "MPS / Kusasa purchase order or IGT form (incl.
               ("proof_of_payment", "bank payment confirmation / proof of payment"),
               ("delivery_note", "MPS's own delivery note (IN number)"), ("supplier_delivery_note", "a supplier's delivery note / waybill"),
               ("job_transfer", "MPS job transfer note"), ("workshop_sheet", "workshop / fabrication drawing sheet"),
-              ("test_cert", "mill test / inspection certificate"), ("other", "anything else (letter, enquiry, contract, blank page...)")]
+              ("test_cert", "mill test / inspection certificate"),
+              ("letter", "a letter (MPS letterhead or from someone else)"), ("memo", "a memo / memorandum"),
+              ("contract", "a contract or agreement (supply, service, rental, fund participation ...)"),
+              ("contract_cancellation", "a form or notice cancelling a contract (e.g. Cartrack cancellation)"),
+              ("order_acknowledgement", "a supplier's order acknowledgement / order confirmation"),
+              ("other", "anything else (enquiry, blank page, ...)")]
 
 
 def types():
@@ -121,8 +127,12 @@ def main():
     if len(chosen) < a.n:                                # not enough likely ones: more unsure
         chosen += [("unsure", x) for x in pick(unsure, a.n - len(chosen))]
 
-    if OUT.exists():
-        shutil.rmtree(OUT)
+    if OUT.exists():                                     # v2: the previous sheet is kept beside it
+        old = OUT.with_name(OUT.name + "-" + __import__("datetime").datetime.fromtimestamp((OUT / "labels.xlsx").stat().st_mtime).strftime("%Y%m%d-%H%M")) if (OUT / "labels.xlsx").exists() else None
+        if old and not old.exists():
+            shutil.move(str(OUT), str(old))
+        else:
+            shutil.rmtree(OUT)
     (OUT / "png").mkdir(parents=True)
     (OUT / "pdf").mkdir()
     items = []
