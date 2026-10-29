@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Numbers pass, step 2: fine-tune a small vision model (Qwen2.5-VL-3B, QLoRA with Unsloth) to read only the line
-quantities and unit prices of a purchase order. Runs in the training venv. Saves the LoRA adapter only: the numbers pass
-runs the base model + adapter directly in PyTorch (no Ollama conversion, so nothing is lost there).
+"""Numbers pass, step 2: fine-tune a small vision model (Qwen2.5-VL-3B, QLoRA with Unsloth) to read the order lines of a
+purchase order (description, quantity, unit price). Runs in the training venv. Saves the LoRA adapter and the prompt it
+was trained with (<out>/prompt.txt): the numbers pass runs the base model + adapter directly in PyTorch (no Ollama
+conversion, so nothing is lost there).
 
     numbers_train.py --data /srv/ml/numbers/data --out /srv/ml/numbers/run-<stamp> [--epochs 2]
 """
@@ -31,6 +32,7 @@ rows = [json.loads(l) for l in open(data / "train.jsonl", encoding="utf-8") if l
 if a.limit:
     rows = rows[:a.limit]
 print(f"{len(rows)} training orders", flush=True)
+(out / "prompt.txt").write_text(rows[0]["prompt"], encoding="utf-8")     # 335: the run reads with the prompt it learnt
 dataset = [{"messages": [
     {"role": "user", "content": [{"type": "image", "image": Image.open(data / r["image"]).convert("RGB")},
                                  {"type": "text", "text": r["prompt"]}]},

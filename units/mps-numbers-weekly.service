@@ -1,0 +1,17 @@
+[Unit]
+Description=MPS PO numbers model, weekly (335, Dino 29 Oct): retrain on every checked order, score against the live model, install when better; Saturday queue to Monday 02:30
+OnFailure=mps-alert@%n.service
+After=network-online.target
+
+[Service]
+Type=simple
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ml/numbers
+Environment=MPS_OCR_CONFIG=/srv/ocr/pipeline/config.json IN_QUEUE=1
+ExecStart=/bin/bash /srv/ocr/pipeline/numbers_run.sh
+# the job works to Monday 02:30 itself; this is the hard stop (the run's trap resumes the worker)
+RuntimeMaxSec=58h
+KillMode=mixed
+TimeoutStopSec=120
+Nice=5

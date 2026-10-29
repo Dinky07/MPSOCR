@@ -9,7 +9,9 @@ In order, each on everything checked so far (the pools grow with every week's sc
   3. workshop sheets   ws_training.py quick
   4. job transfers     jt_training.py quick
      test certificates tc_training.py quick   (heat numbers against the old site, checked certs)
-  5. PO numbers pass   numbers_run.sh          fine-tune the line quantity / price model, score it (not live: report only)
+  5. PO numbers pass   numbers_weekly_start.sh starts mps-numbers-weekly.service (335): fine-tune the numbers model on every
+     checked order (descriptions too), score it against the live one on all test orders, install it when better;
+     runs on in its own unit until Monday 02:30
 Each quick job checks for itself whether there is anything new to learn from and skips quietly when there isn't; a new
 setup is only installed when it scores better on the test documents. Nothing starts while another training job runs.
 
@@ -28,7 +30,7 @@ STEPS = [("import", ["po_daily.py", "import", "--apply"], "PO checking files"),
          ("ws", ["ws_training.py", "quick"], "workshop sheets"),
          ("jt", ["jt_training.py", "quick"], "job transfers"),
          ("tc", ["tc_training.py", "quick"], "test certificates"),
-         ("numbers", ["numbers_run.sh"], "PO numbers pass (line quantities and prices)")]
+         ("numbers", ["numbers_weekly_start.sh"], "PO numbers model (weekly retrain in mps-numbers-weekly.service)")]
 
 
 def running(tdir):

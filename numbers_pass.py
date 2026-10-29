@@ -2,7 +2,8 @@
 """Numbers pass, LIVE as a batch (Dino 27 Oct: "yes please set up the batch pass"). After the day's purchase-order batch
 has been read and before its checking file is written (po_daily watch calls numbers_pass_run.sh), the fine-tuned
 numbers model reads each order's line quantities and unit prices again. Where it reads the same number of lines as the
-main reader, its quantity and unit price replace the main reader's (a value it could not read keeps the main reader's);
+main reader, its quantity and unit price replace the main reader's (a value it could not read keeps the main reader's),
+and its description too when the run's install.json allows it (335: only once it scored better than the reader);
 amounts, order value, lines text and value note are rebuilt the way the reader builds them. Per order:
   * sidecar["numbers_pass"] = {run, at, secs, lines, applied, changed: [{line, qty: [old, new], price: [old, new]}]}
   * sidecar["fields_read"] = the main reader's own reading, kept before anything changes (training compares the main
@@ -33,7 +34,14 @@ a = ap.parse_args()
 root, run = Path(a.root), Path(a.run).resolve()
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sidecar_lock                                              # noqa: E402  (review F10: one lock per sidecar for every writer)
-PROMPT = json.loads(open(Path(a.data) / "test.jsonl", encoding="utf-8").readline())["prompt"]
+# 335: the prompt the model was trained with (its run folder), so rebuilding the dataset never changes the live reads;
+# install.json (numbers_run.sh) says which fields the run may change - descriptions only once it has beaten the reader
+PROMPT = (run / "prompt.txt").read_text(encoding="utf-8") if (run / "prompt.txt").exists() else \
+    json.loads(open(Path(a.data) / "test.jsonl", encoding="utf-8").readline())["prompt"]
+try:
+    APPLY = dict({"qty": True, "price": True, "description": False}, **json.load(open(run / "install.json"))["apply"])
+except (OSError, ValueError, KeyError):
+    APPLY = {"qty": True, "price": True, "description": False}
 
 
 def num(v):
@@ -124,7 +132,8 @@ model, tok = FastVisionModel.from_pretrained(str(run / "lora"), load_in_4bit=Tru
 FastVisionModel.for_inference(model)
 print(f"model loaded in {time.time() - t0:.0f}s, {torch.cuda.memory_allocated() / 2**30:.2f} GB on the GPU", flush=True)
 
-tot = {"orders": 0, "applied": 0, "line_count_differs": 0, "unreadable": 0, "lines_changed": 0, "qty_changed": 0, "price_changed": 0}
+tot = {"orders": 0, "applied": 0, "line_count_differs": 0, "unreadable": 0, "lines_changed": 0, "qty_changed": 0, "price_changed": 0,
+       "description_changed": 0}
 rows = []
 td = tempfile.mkdtemp()
 for n, (js, pdf) in enumerate(orders, 1):
@@ -137,7 +146,7 @@ for n, (js, pdf) in enumerate(orders, 1):
         text = tok.apply_chat_template(msgs, add_generation_prompt=True)
         inp = tok(Image.open(png).convert("RGB"), text, add_special_tokens=False, truncation=False, return_tensors="pt").to("cuda")
         with torch.no_grad():
-            o = model.generate(**inp, max_new_tokens=1024, do_sample=False)
+            o = model.generate(**inp, max_new_tokens=2048, do_sample=False)
         raw = tok.decode(o[0][inp["input_ids"].shape[1]:], skip_special_tokens=True)
     except Exception as ex:
         raw = f"ERROR {ex}"
@@ -175,14 +184,19 @@ for n, (js, pdf) in enumerate(orders, 1):
             for j, (i, y) in enumerate(zip(items, nums), 1):
                 ch = {"line": j}
                 q, p = num(y.get("qty")), num(y.get("unit_price"))
-                if q is not None and q != num(i.get("quantity")):
+                if APPLY["qty"] and q is not None and q != num(i.get("quantity")):
                     ch["qty"] = [i.get("quantity"), q]
                     i["quantity"] = int(q) if float(q).is_integer() else q
                     tot["qty_changed"] += 1
-                if p is not None and p != num(i.get("unit_price")):
+                if APPLY["price"] and p is not None and p != num(i.get("unit_price")):
                     ch["price"] = [i.get("unit_price"), p]
                     i["unit_price"] = round(p, 2)
                     tot["price_changed"] += 1
+                d = " ".join(str(y.get("item") or "").split())
+                if APPLY["description"] and d and d.upper() != " ".join(str(i.get("description") or "").split()).upper():
+                    ch["description"] = [i.get("description"), d]
+                    i["description"] = d
+                    tot["description_changed"] += 1
                 if len(ch) > 1:
                     rec["changed"].append(ch)
             tot["lines_changed"] += len(rec["changed"])
@@ -198,7 +212,8 @@ for n, (js, pdf) in enumerate(orders, 1):
     rows.append({"file": sc.get("file"), "order": f.get("order_number"), "secs": secs, "applied": rec["applied"],
                  "why": rec.get("why", ""), "lines": len(items), "changed": "; ".join(
                      f"L{c['line']}" + (f" qty {c['qty'][0]}->{c['qty'][1]}" if "qty" in c else "") +
-                     (f" price {c['price'][0]}->{c['price'][1]}" if "price" in c else "") for c in rec["changed"])})
+                     (f" price {c['price'][0]}->{c['price'][1]}" if "price" in c else "") +
+                     (f" desc {c['description'][0]!r}->{c['description'][1]!r}" if "description" in c else "") for c in rec["changed"])})
     if n % 50 == 0 or n == len(orders):
         print(f"  {n}/{len(orders)}  {secs}s  applied {tot['applied']}, lines changed {tot['lines_changed']}", flush=True)
 

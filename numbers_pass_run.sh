@@ -24,7 +24,8 @@ say "numbers pass for $DAY with $(readlink -f $D/active)"
 # anything to do? (cheap check without the GPU)
 N=$($AS $V $P/numbers_pass.py --day "$DAY" --count "$@" 2>/dev/null | grep -oE '^[0-9]+ order' | grep -oE '[0-9]+' | head -1)
 [ "${N:-0}" = 0 ] && { say "no unchecked orders with lines in the batch: nothing to do"; exit 0; }
-while systemctl is-active --quiet mps-ocr-training.service || systemctl is-active --quiet mps-numbers.service; do sleep 60; done
+while systemctl is-active --quiet mps-ocr-training.service || systemctl is-active --quiet mps-numbers.service \
+      || systemctl is-active --quiet mps-numbers-weekly.service; do sleep 60; done
 if [ ! -e "$ROOT/PAUSE" ]; then echo "numbers pass $DAY" > "$ROOT/PAUSE"; MADE_PAUSE=1; say "worker paused"; fi
 MAX_WAIT=3600 $AS $P/gpu_wait.sh || { say "GPU busy - numbers pass skipped, main reader's values kept"; exit 0; }
 sleep 60                                   # the worker finishes the page it is on

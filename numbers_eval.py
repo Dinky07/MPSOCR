@@ -1,30 +1,38 @@
 #!/usr/bin/env python3
-"""Numbers pass, step 3: score the fine-tuned numbers model on the test orders against the checked (spreadsheet) values,
-next to the current reader's reading of the same orders (test.jsonl "main"). Three ways are scored per line:
-  main      the current reader alone
-  numbers   the numbers model alone
-  combined  the current reader's lines, with quantity and price taken from the numbers model when both read the same
-            number of lines (what the pipeline would do)
-Runs in the training venv. Writes <run>/eval.json and prints the table.
+"""Numbers pass, step 3: score a fine-tuned numbers model on the test orders against the checked (spreadsheet) values,
+next to the current reader's reading of the same orders (test.jsonl "main"). Four ways are scored per line:
+  main          the current reader alone
+  numbers       the numbers model alone
+  combined      the current reader's lines, quantity and price from the numbers model when both read the same number of
+                lines (what the pipeline does)
+  combined_desc the same, with the description from the numbers model too
+Quantity and price must equal the checked value; a description counts when it is at least 90 % alike after keeping only
+letters and digits (the PO training's rule). The model reads with the prompt it was trained with (<run>/prompt.txt;
+runs from before 335 have the prompt of their dataset). Runs in the training venv. Writes <run>/<out-name> (eval.json).
 
-    numbers_eval.py --data /srv/ml/numbers/data --run /srv/ml/numbers/run-<stamp>
+    numbers_eval.py --data /srv/ml/numbers/data --run /srv/ml/numbers/run-<stamp> [--out-name eval.json]
 """
-import argparse, json, re, time
+import argparse, difflib, json, re, time
 from pathlib import Path
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--data", required=True)
 ap.add_argument("--run", required=True)
+ap.add_argument("--out-name", default="eval.json")
 ap.add_argument("--base", default="unsloth/Qwen2.5-VL-3B-Instruct-bnb-4bit")
-ap.add_argument("--max-new", type=int, default=1024)
+ap.add_argument("--max-new", type=int, default=2048)
+ap.add_argument("--limit", type=int, default=0, help="smoke test: first N test orders only")
 a = ap.parse_args()
 
 from unsloth import FastVisionModel                              # noqa: E402
 from PIL import Image                                            # noqa: E402
 import torch                                                     # noqa: E402
 
-data, run = Path(a.data), Path(a.run)
+data, run = Path(a.data), Path(a.run).resolve()
 tests = [json.loads(l) for l in open(data / "test.jsonl", encoding="utf-8") if l.strip()]
+if a.limit:
+    tests = tests[: a.limit]
+prompt = (run / "prompt.txt").read_text(encoding="utf-8") if (run / "prompt.txt").exists() else tests[0]["prompt"]
 model, tokenizer = FastVisionModel.from_pretrained(str(run / "lora"), load_in_4bit=True, max_seq_length=8192)
 FastVisionModel.for_inference(model)
 
@@ -36,6 +44,15 @@ def num(v):
         return None
 
 
+def norm(v):
+    return re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
+
+
+def same_desc(a_, b_):
+    x, y = norm(a_), norm(b_)
+    return bool(x) and difflib.SequenceMatcher(None, x, y).ratio() >= 0.9
+
+
 def parse(txt):
     m = re.search(r"\{.*\}", txt, re.S)
     try:
@@ -45,7 +62,7 @@ def parse(txt):
 
 
 def read(img):
-    msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": tests[0]["prompt"]}]}]
+    msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
     text = tokenizer.apply_chat_template(msgs, add_generation_prompt=True)
     inp = tokenizer(Image.open(img).convert("RGB"), text, add_special_tokens=False, truncation=False, return_tensors="pt").to("cuda")
     with torch.no_grad():
@@ -53,7 +70,8 @@ def read(img):
     return tokenizer.decode(o[0][inp["input_ids"].shape[1]:], skip_special_tokens=True)
 
 
-tot = {k: {"qty": [0, 0], "price": [0, 0]} for k in ("main", "numbers", "combined")}
+KINDS = ("main", "numbers", "combined", "combined_desc")
+tot = {k: {"qty": [0, 0], "price": [0, 0], "description": [0, 0]} for k in KINDS}
 docs, t0 = [], time.time()
 for i, r in enumerate(tests, 1):
     s = time.time()
@@ -65,12 +83,20 @@ for i, r in enumerate(tests, 1):
     if used:
         for c, n in zip(comb, nums):
             c["qty"], c["unit_price"] = n.get("qty"), n.get("unit_price")
-    for k, got in (("main", main), ("numbers", nums or []), ("combined", comb)):
+    comb_d = [dict(c) for c in comb]
+    if used:
+        for c, n in zip(comb_d, nums):
+            if str(n.get("item") or "").strip():
+                c["description"] = n.get("item")
+    numbers = [{"qty": n.get("qty"), "unit_price": n.get("unit_price"), "description": n.get("item")} for n in (nums or [])]
+    for k, got in (("main", main), ("numbers", numbers), ("combined", comb), ("combined_desc", comb_d)):
         for j, v in enumerate(ver):
             g = got[j] if j < len(got) else {}
-            tot[k]["qty"][1] += 1; tot[k]["price"][1] += 1
+            for f in ("qty", "price", "description"):
+                tot[k][f][1] += 1
             tot[k]["qty"][0] += num(g.get("qty")) == num(v.get("qty"))
             tot[k]["price"][0] += num(g.get("unit_price")) == num(v.get("unit_price"))
+            tot[k]["description"][0] += same_desc(g.get("description"), v.get("description"))
     docs.append({"file": r["file"], "secs": round(time.time() - s, 1), "raw": raw, "numbers": nums, "main": main,
                  "verified": ver, "numbers_used": used})
     print(f"  {i}/{len(tests)} {r['file'][:50]:50} {time.time() - s:5.1f}s lines {len(ver)} numbers {len(nums or [])} main {len(main)}", flush=True)
@@ -78,9 +104,10 @@ res = {k: {f: {"right": v[f][0], "counted": v[f][1], "acc": round(v[f][0] / v[f]
        for k, v in tot.items()}
 res["secs_per_order"] = round((time.time() - t0) / max(1, len(tests)), 1)
 res["numbers_used_on"] = sum(d["numbers_used"] for d in docs)
-json.dump({"results": res, "docs": docs}, open(run / "eval.json", "w"), ensure_ascii=False, indent=1)
+res["tests"] = len(tests)
+json.dump({"results": res, "docs": docs}, open(run / a.out_name, "w"), ensure_ascii=False, indent=1)
 print(f"\n{len(tests)} test orders, {tot['main']['qty'][1]} lines; numbers model used on {res['numbers_used_on']} orders "
       f"(same line count as the current reader); {res['secs_per_order']} s per order")
-print(f"{'':10}{'line qty':>14}{'line price':>14}")
-for k in ("main", "numbers", "combined"):
-    print(f"{k:10}{res[k]['qty']['acc'] * 100:13.1f}%{res[k]['price']['acc'] * 100:13.1f}%")
+print(f"{'':14}{'line qty':>12}{'line price':>12}{'description':>13}")
+for k in KINDS:
+    print(f"{k:14}" + "".join(f"{res[k][f]['acc'] * 100:11.1f}%" for f in ("qty", "price")) + f"{res[k]['description']['acc'] * 100:12.1f}%")
