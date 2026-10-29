@@ -35,12 +35,25 @@ ANSWER_SCHEMA = {
 NUM_PREDICT = 3072
 NUM_CTX = 49152         # same as po_reader.NUM_CTX: Ollama keeps one model loaded across document types
 _FEW = {}
+_PROMPTS = {}
 
 
-def fewshot_msgs(fewshot_dir):
-    """Worked examples (image + verified answer), cached per folder."""
-    if fewshot_dir in _FEW:
-        return _FEW[fewshot_dir]
+def prompt_text(name=None):
+    """jt_prompt.txt, or another prompt file beside this one named by the type (e.g. jt_prompt_ronin.txt)."""
+    if not name:
+        return PROMPT
+    if name not in _PROMPTS:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.basename(name)), encoding="utf-8") as fh:
+            _PROMPTS[name] = fh.read()
+    return _PROMPTS[name]
+
+
+def fewshot_msgs(fewshot_dir, prompt=None):
+    """Worked examples (image + verified answer), cached per folder and prompt."""
+    prompt = prompt or PROMPT
+    key = (fewshot_dir, prompt)
+    if key in _FEW:
+        return _FEW[key]
     msgs = []
     if fewshot_dir and os.path.isdir(fewshot_dir):
         for j in sorted(glob.glob(os.path.join(fewshot_dir, "*.json"))):
@@ -53,15 +66,16 @@ def fewshot_msgs(fewshot_dir):
                 ans = json.load(fh)
             for li in ans.get("line_items") or []:        # examples predate the flag: every item there starts after a gap
                 li.setdefault("blank_row_above", True)
-            msgs.append({"role": "user", "content": PROMPT, "images": [base64.b64encode(open(png, "rb").read()).decode()]})
+            msgs.append({"role": "user", "content": prompt, "images": [base64.b64encode(open(png, "rb").read()).decode()]})
             msgs.append({"role": "assistant", "content": json.dumps(ans, ensure_ascii=False)})
-    _FEW[fewshot_dir] = msgs
+    _FEW[key] = msgs
     return msgs
 
 
-def read(path, ollama_url, model="qwen2.5vl:7b", fewshot_dir=None, px=1600, timeout=900, keep_alive="30m"):
+def read(path, ollama_url, model="qwen2.5vl:7b", fewshot_dir=None, px=1600, timeout=900, keep_alive="30m", prompt=None):
     """(answer dict in ANSWER_SCHEMA, pages read, raw text). Page 1 only: a JT is a single page."""
-    if not PROMPT:
+    text = prompt_text(prompt)
+    if not text:
         raise RuntimeError("jt_prompt.txt is missing beside jt_reader.py")
     with tempfile.TemporaryDirectory() as tmp:
         p = str(path)
@@ -75,7 +89,7 @@ def read(path, ollama_url, model="qwen2.5vl:7b", fewshot_dir=None, px=1600, time
             raise RuntimeError("no pages could be rendered")
         body = {"model": model, "stream": False, "format": ANSWER_SCHEMA, "keep_alive": keep_alive,
                 "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": NUM_PREDICT},
-                "messages": fewshot_msgs(fewshot_dir) + [{"role": "user", "content": PROMPT,
+                "messages": fewshot_msgs(fewshot_dir, text) + [{"role": "user", "content": text,
                             "images": [base64.b64encode(open(pngs[0], "rb").read()).decode()]}]}
         req = urllib.request.Request(ollama_url.rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
@@ -140,7 +154,7 @@ def _clean(v):
     return None if s in ("", "null", "None", "[signature]") else s
 
 
-def to_worker(a):
+def to_worker(a, number_prefix=None):
     """The answer in the worker's JT schema (what extract_builtin returned before): normalise('jt') does the rest."""
     items = []
     for li in a.get("line_items") or []:
@@ -161,7 +175,10 @@ def to_worker(a):
     job = _clean(a.get("mps_job_no"))
     if job:
         job = re.sub(r"^(?:J(?:OB)?\s*(?:NO\.?)?\s*[:#]?\s*)(?=\d)", "", job.upper()).strip()
-    out = {"jt_number": re.sub(r"\D", "", str(a.get("jt_number") or "")) or None,
+    num = re.sub(r"\D", "", str(a.get("jt_number") or "")) or None
+    if num and number_prefix:                                  # Ronin forms: DF 16593 -> DF16593
+        num = f"{number_prefix}{num}"
+    out = {"jt_number": num,
            "date": _clean(a.get("date")), "job_number": job,
            "from": _clean(a.get("transferred_from")), "to": _clean(a.get("transferred_to")),
            "written_by": _clean(a.get("transferred_by")), "received_by": _clean(a.get("received_by")),

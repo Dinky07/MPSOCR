@@ -383,6 +383,7 @@ def normalise(doc_type, raw, cfg, own_vat=()):
             return (f"{q} {u}".strip() + " x " if q else "") + str(i.get("description") or "").strip()
         f["lines_text"] = "\n".join(lt(i) for i in items) or None
         f["line_count"] = len(items)
+        f["item_codes"] = "; ".join(str(i["item_no"]).strip() for i in items if str(i.get("item_no") or "").strip()) or None
         f["review"] = "; ".join(x[7:] for x in flags if x.startswith("check: ")) or None
     return f, flags
 
@@ -597,18 +598,22 @@ class Worker:
         if dt == "ws":
             return self.ws_settings()["model"]
         if dt == "jt" and jt_reader and t.get("jt_reader", True) is not False:
-            return self.jt_settings()["model"]
+            return self.jt_settings(folder)["model"]
         if dt == "test_cert":
             return self.tc_settings(folder)["model"]
         if dt == "pop":
             return self.pop_model()
         return t.get("model", self.cfg.get("model"))
 
-    def jt_settings(self):
-        """JT reader settings: config doc_types.JobTransfers.jt_reader ({model, fewshot_dir, px}); qwen2.5vl and the
-        jt_fewshot worked examples beside this file unless set (benchmark 23 Oct 2026: eval_jt.py)."""
+    def jt_settings(self, folder="JobTransfers"):
+        """JT reader settings: config doc_types.<folder>.jt_reader ({model, fewshot_dir, px, prompt, number_prefix}) over
+        JobTransfers' own; qwen2.5vl and the jt_fewshot worked examples beside this file unless set (benchmark 23 Oct
+        2026: eval_jt.py). RoninJobTransfers (29 Oct, 331): jt_prompt_ronin.txt and the DF prefix."""
         t = self.types.get("JobTransfers") or {}
         c = dict(t.get("jt_reader")) if isinstance(t.get("jt_reader"), dict) else {}
+        own = (self.types.get(folder) or {}).get("jt_reader")
+        if folder != "JobTransfers" and isinstance(own, dict):
+            c.update(own)
         c.setdefault("model", "qwen2.5vl:7b")
         c.setdefault("fewshot_dir", str(Path(__file__).resolve().with_name("jt_fewshot")))
         c.setdefault("px", 1600)
@@ -992,6 +997,9 @@ class Worker:
         for alt in rules:
             if all(re.fullmatch(pat, str(fields.get(k) or "").strip(), re.I) for k, pat in alt.items()):
                 return None
+        if doc_type == "jt":
+            jn = str(fields.get("jt_number") or "").strip()
+            return f"JT number '{jn}' is not in the expected form" if jn else "no JT number read"
         on = str(fields.get("order_number") or "").strip()
         return f"order number '{on}' is not an A-number" if on else "no order number read"
 
@@ -1144,7 +1152,8 @@ class Worker:
         if doc_type == "test_cert":       # keeps its own name (the library item's name in the backfill), Windows-safe
             return re.sub(r"\s+", " ", re.sub(r'[\\/:*?"<>|#%]+', " ", src.stem)).strip(" .")[:150] or "document"
         if doc_type == "jt" and fields.get("jt_number"):
-            stem = f"JT{fields['jt_number']}"
+            n = str(fields["jt_number"])
+            stem = f"JT{n}" if n.isdigit() else n              # Ronin: DF16593, as the AR - Ronin JTs library names them
         elif doc_type == "po" and po_reader and "form_label" in fields:
             # trained PO reader: name the file the way the PO library names it (SUPPLIER-ORDER-dd-MM-yyyy)
             return po_reader.library_name(fields, src.name, "")[:150] or safe_name(src.stem)
@@ -1244,15 +1253,18 @@ class Worker:
                         raw, npages = extract_command(doc_type, part, self.cfg, tcfg)
                         extractor = "command"
                     elif doc_type == "jt" and jt_reader and tcfg.get("jt_reader", True) is not False:
-                        jc = self.jt_settings()
+                        jc = self.jt_settings(folder)
                         try:
                             ans, npages, _ = jt_reader.read(part, self.cfg["ollama_url"], jc["model"], jc["fewshot_dir"], int(jc["px"]),
-                                                            int(self.cfg.get("ollama_timeout", 900)), self.cfg.get("keep_alive", "15m"))
+                                                            int(self.cfg.get("ollama_timeout", 900)), self.cfg.get("keep_alive", "15m"),
+                                                            prompt=jc.get("prompt"))
                         except (urllib.error.URLError, ConnectionError) as e:
                             if not ollama_up(self.cfg):
                                 raise OllamaDown(str(e))
                             raise
-                        raw = jt_reader.to_worker(ans)
+                        raw = jt_reader.to_worker(ans, jc.get("number_prefix"))
+                        if tcfg.get("company"):
+                            raw["company"] = tcfg["company"]
                         extractor = "jt_v1"
                         extra["jt_model"] = jc["model"]
                         extra["jt_answer"] = ans                # the reader's own answer (training format)
