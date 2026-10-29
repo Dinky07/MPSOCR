@@ -18,7 +18,7 @@ for js in sorted(glob.glob(str(ROOT / "out" / "RoninOrders" / "*.json")) + glob.
     except (OSError, ValueError):
         continue
     src = str(sc.get("source_file") or "").upper().replace(" ", "")
-    if not re.search(r"(?<![A-Z0-9])A\d{5}(?!\d)", src) or re.search(r"(?<![A-Z0-9])DF\d{4}(?!\d)", src):
+    if not (re.search(r"(?<![A-Z0-9])A\d{5}(?!\d)", src) or re.search(r"(?<![A-Z0-9])A ?\d{5}(?!\d)", str(sc.get("source_file") or "").upper())) or re.search(r"(?<![A-Z0-9])DF\d{4}(?!\d)", src) or re.search(r"(?<![A-Z0-9])DF ?\d{4}(?!\d)", str(sc.get("source_file") or "").upper()):
         continue
     pdf = js.parent / str(sc.get("file") or "")
     print(("back to Purchase Orders: " if a.apply else "would send back: ") + f"{js.name} ({sc.get('source_file')})")

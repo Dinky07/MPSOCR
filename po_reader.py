@@ -274,7 +274,7 @@ def tidy(d, rel, source_folder=None, source_pdf=None, source_modified=None, sour
     # an MPS order made OUT TO Polymer: "POLYMER" in the supplier box makes the model call it a Polymer form and the
     # number a PL number, but the scan is named after its red A-number (POLYMER-A77128-10541E-HARMONY.pdf). A Polymer
     # order's scan never carries an A-number, so: A-number in the file name with the same last digits, no PL number
-    m_fa = re.search(r"(?<![A-Z0-9])A(\d{5})(?!\d)", base.replace(" ", ""))
+    m_fa = re.search(r"(?<![A-Z0-9])A(\d{5})(?!\d)", base.replace(" ", "")) or re.search(r"(?<![A-Z0-9])A ?(\d{5})(?!\d)", base)
     if m_fa and (form == "polymer_order" or on.startswith("PL")) and not re.search(r"(?<![A-Z0-9])PLS?\d{4}(?!\d)", base.replace(" ", "")) \
             and (not dig or m_fa.group(1).endswith(dig[-4:])):
         chk.append(f"MPS order A{m_fa.group(1)} made out to Polymer (read as a Polymer form{', ' + on if on else ''}): taken as an MPS order")
@@ -283,7 +283,7 @@ def tidy(d, rel, source_folder=None, source_pdf=None, source_modified=None, sour
         on, dig = "A" + m_fa.group(1), m_fa.group(1)
         if not str(d.get("supplier") or "").strip():
             d["supplier"] = "POLYMER"
-    if m_fa and (form == "ronin_order" or on.startswith("DF")) and not re.search(r"(?<![A-Z0-9])DF\d{4}(?!\d)", base.replace(" ", "")) \
+    if m_fa and (form == "ronin_order" or on.startswith("DF")) and not re.search(r"(?<![A-Z0-9])DF\d{4}(?!\d)", base.replace(" ", "")) and not re.search(r"(?<![A-Z0-9])DF ?\d{4}(?!\d)", base) \
             and (not dig or m_fa.group(1).endswith(dig[-4:])):
         chk.append(f"MPS order A{m_fa.group(1)} made out to Ronin (read as a Ronin form{', ' + on if on else ''}): taken as an MPS order")
         form = d["form"] = "mps_order"
