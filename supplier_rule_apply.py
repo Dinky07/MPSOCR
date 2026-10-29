@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply the supplier rules (supplier_rules.json, Dino 29 Oct 05:18: every "SMS F..." reading is SMS FLANGES) to the
+"""Apply the supplier rules (supplier_rules.json, Dino 29 Oct: SMS and every "SMS F..." reading is "SMS Flanges") to the
 purchase / Polymer orders already read: queue, hold and synced.
 
     python3 supplier_rule_apply.py [--apply]
@@ -76,13 +76,13 @@ for t in ("PurchaseOrders", "PolymerOrders"):
                         sc["flags"] = [x for x in (sc.get("flags") or []) if not drop(x)]
                         sc["needs_review"] = bool(sc["flags"])
                         sc["fields"] = f
-                        sc.setdefault("edits", []).append({"at": stamp, "by": "supplier rule (Dino 29 Oct: SMS F... = SMS FLANGES)",
+                        sc.setdefault("edits", []).append({"at": stamp, "by": f"supplier rule ({name})",
                                                            "changes": [{"field": "supplier", "old": old, "new": name}]})
                         # not uploaded yet: rename so the library file name carries the right supplier
                         pdf = js.parent / str(sc.get("file") or "")
                         if where != "synced" and pdf.is_file() and not Path(str(js) + ".uploaded").exists():
                             m = re.match(r"^(.*?)(-(?:A\d{5}|PL\d{4}|\d{5}).*)$", pdf.stem)
-                            if m and key(m.group(1)) != kn and po_reader.supplier_rule(m.group(1)):
+                            if m and m.group(1) != name and po_reader.supplier_rule(m.group(1)):
                                 newpdf = free_name(pdf.parent, name + m.group(2), pdf.suffix)
                                 os.replace(pdf, newpdf)
                                 sc["file"] = newpdf.name
