@@ -154,7 +154,7 @@ SCHEMAS = {
             "job_number":      _s("MPS job number if referenced (4-5 digits + letter)"),
             "currency":        _s("Currency code, ZAR if Rand"),
             "subtotal":        _n("Total excluding VAT"),
-            "vat":             _n("VAT amount"),
+            "vat":             _n("VAT amount in Rand, not the VAT rate"),
             "total":           _n("Total including VAT"),
             "items": {"type": "array", "items": {"type": "object", "properties": {
                 "item_code":   _s("Supplier item code"),
@@ -175,7 +175,9 @@ PROMPTS = {
     "po": ("This is a Mining Pressure Systems (MPS) purchase order, often handwritten. "
            "Read every field and line exactly as written; use null when blank or unreadable. Do not invent values."),
     "supplier_invoice": ("This is a supplier tax invoice issued TO Mining Pressure Systems (MPS). "
-                         "The supplier is the issuing company, never MPS. Amounts are numbers without currency symbols or thousands separators. "
+                         "The supplier is the issuing company, never MPS. Amounts are numbers in Rand with a dot before the cents and no "
+                         "currency symbol or thousands separator: 15 522,52 or 15,522.52 or R15522.52 is 15522.52, and a "
+                         "handwritten 12893-80 is 12893.80; keep the cents. vat is the VAT amount in Rand, never the VAT rate (15 %). "
                          "The invoice number may be labelled Invoice No, Tax Invoice No, Document No or Doc No, sometimes as a column "
                          "heading with the value underneath. Use null for anything not printed. Include every line item."),
 }
@@ -296,6 +298,9 @@ def parse_number(v):
     t = re.sub(r"[^\d,.\-]", "", str(v))
     if not t:
         return None
+    m = re.fullmatch(r"(-?[\d,.]*\d)-(\d{2})", t)        # handwritten 12893-80: the dash is the decimal point (334)
+    if m:
+        t = f"{m.group(1)}.{m.group(2)}"
     if "," in t and "." in t:
         t = t.replace(",", "") if t.rfind(".") > t.rfind(",") else t.replace(".", "").replace(",", ".")
     elif "," in t:
@@ -366,6 +371,22 @@ def normalise(doc_type, raw, cfg, own_vat=()):
         if re.search(r"mining\s*pressure", str(f.get("supplier_name") or ""), re.I) or (vat_no and vat_no in set(own_vat)):
             flags.append("supplier_is_mps")      # MPS's own document (e.g. a purchase order), not a supplier invoice
         sub, vat, tot = f.get("subtotal"), f.get("vat"), f.get("total")
+        # 334: the total against the VAT (VAT / rate x (1 + rate)). When it fails but subtotal + VAT passes, the read
+        # total is a misread digit (Anderbolt 85379: 5606.35 for 5806.35) and subtotal + VAT replaces it; when neither
+        # passes, the invoice is flagged for review (mixed or zero-rated VAT lands there too)
+        rates = ((cfg.get("doc_types", {}).get("SupplierInvoices", {}) or {}).get("cpu", {}) or {}).get("vat_rates") or [0.15, 0.14]
+        if vat and tot is not None:
+            by_vat = {r: round(vat / r * (1 + r), 2) for r in rates}
+            if not any(abs(tot - x) <= 1.0 for x in by_vat.values()):
+                r_ok = [r for r, x in by_vat.items() if sub is not None and abs(sub + vat - x) <= 1.0]
+                if r_ok:
+                    f["total_as_read"], f["total"] = tot, round(sub + vat, 2)
+                    f.setdefault("text_fixes", []).append({"field": "total", "value": f["total"], "by": "worker",
+                                                           "how": f"subtotal + VAT, which agrees with VAT at {r_ok[0]:.0%}; read {tot}"})
+                    flags.append("total_from_subtotal_vat")
+                    tot = f["total"]
+                else:
+                    flags.append("total_vat_mismatch")
         if None not in (sub, vat, tot) and abs(sub + vat - tot) > 1.0:
             flags.append("totals_mismatch")
         amounts = [it.get("amount") for it in items if it.get("amount") is not None]
