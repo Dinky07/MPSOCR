@@ -1883,7 +1883,7 @@ function recentHtml(list){
 }
 // ---- tabs: Overview + one per document type (the invoice archive sits with Supplier Invoices)
 const TAB_DEFS=[{id:"jt",label:"Job Transfers",types:["JobTransfers"]},{id:"po",label:"Purchase Orders",types:["PurchaseOrders"]},
-  {id:"pl",label:"Polymer Orders",types:["PolymerOrders"]},{id:"ro",label:"Ronin Orders",types:["RoninOrders"]},{id:"pop",label:"Proof of Payments",types:["ProofOfPayments"]},
+  {id:"pl",label:"Polymer Orders",types:["PolymerOrders"]},{id:"ro",label:"Ronin Purchase Orders",types:["RoninOrders"]},{id:"pop",label:"Proof of Payments",types:["ProofOfPayments"]},
   {id:"si",label:"Supplier Invoices",types:["SupplierInvoices","SupplierInvoicesArchive"],vat:true},
   {id:"dn",label:"Delivery Notes",types:["DeliveryNotes"]},{id:"ws",label:"Workshop Sheets",types:["WorkshopSheets"]},{id:"tc",label:"Test Certificates",types:["TestCerts"]}];
 let tab=(location.hash||"#overview").slice(1),tabsKey="";

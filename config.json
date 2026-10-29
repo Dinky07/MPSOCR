@@ -135,7 +135,7 @@
    "split_pages": true,
    "max_pages": 2,
    "command": null,
-   "label": "Ronin Orders",
+   "label": "Ronin Purchase Orders",
    "_note": "Ronin Flanges & Fittings orders (DF####), Dino 29 Oct 2026: AP - Authorised Purchase Orders library (StockControl) + MPSBusiness docs.PurchaseOrder",
    "hold_unless": [
     {
