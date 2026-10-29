@@ -6,7 +6,8 @@ An orphan is a page document on hold (out/<Type>/hold) of a multi-page scan whos
 put it back together with. They go to deleted/<Type>/<yyyy-mm>/ with a reason (recoverable), like a dashboard delete.
 Kept: an order form with its order number (that is a document, not a supporting page), a merged/grouped document,
 a page that is checked, edited on the dashboard by a person, uploaded or locked, and a page with another page of the
-same scan still on hold (coalesce_hold's job).
+same scan still on hold (coalesce_hold's job), and a page read as a purchase order whose other pages are gone.
+v2 (09:10): pages whose other pages are no longer anywhere in the pipeline (deleted earlier) count as orphans too.
     python3 orphan_remove.py [--apply]
 Report: reports/orphan pages removed <stamp>[ dry run].csv / .json
 """
@@ -61,8 +62,8 @@ def main():
             why = None
             if f.get("form") in FORMS and f.get("order_number"):
                 why = "kept: an order form"
-            elif not others:
-                why = "kept: no other page of the scan found (not an orphan)"
+            elif not others and "purchase order" in str(f.get("library_doc_type") or f.get("po_doc_type") or "").lower():
+                why = "kept: read as a purchase order, rest of the scan not found"
             elif [w for w in others if w["place"] == "hold" and w["type"] == t]:
                 why = "kept: another page of the scan is still on hold"
             elif f.get("checked"):
@@ -71,7 +72,7 @@ def main():
                 why = "kept: edited on the dashboard"
             elif Path(p + ".uploaded").exists():
                 why = "kept: uploaded"
-            elsewhere = "; ".join(f"p{','.join(str(x) for x in w['pages'] if x)} {w['type']} {w['place']}" for w in others)[:300]
+            elsewhere = "; ".join(f"p{','.join(str(x) for x in w['pages'] if x)} {w['type']} {w['place']}" for w in others)[:300] or "no longer in the pipeline (deleted or moved earlier)"
             res = why or ("removed" if a.apply else "would remove")
             if a.apply and not why:
                 try:
