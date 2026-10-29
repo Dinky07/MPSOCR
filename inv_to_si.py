@@ -13,6 +13,7 @@ Moved like hold_resort does it: the PDF is copied to in/SupplierInvoices/ with a
 folder) so the invoice reader reads it, and the hold copy goes to deleted/<Type>/<yyyy-mm>/ with the reason (recoverable).
 Left alone: order forms with an order number, checked, edited by a person on the dashboard, uploaded or locked documents.
     python3 inv_to_si.py [--apply] [--jobs 4]
+v2 (09:45): exclusions tightened after the first dry run (pro formas, quotations, test certs, order acknowledgements, POPs).
 Report: reports/invoices to supplier invoices <stamp>[ dry run].csv / .json
 """
 import argparse, csv, glob, json, os, re, shutil, sys
@@ -30,28 +31,39 @@ ROOT = Path("/srv/ocr/scans/pipeline")
 FORMS = {"mps_order", "polymer_order", "internal_group_transfer", "ronin_order"}
 SCRIPT_EDIT = re.compile(r"^(po_autocheck|route_sort|hold_resort|od_sort|requeue_po12|numbers_pass|fix_|supplier rule|ronin_|coalesce_hold|regroup_|orphan_|\d+-)", re.I)
 GROUP = re.compile(r"\bMINING PRESSURE\b|\bKUSASA\b|\bPOLYMER (SYSTEMS|LININGS|ENGINEERING|PRODUCTS)?\b|(?<!\d)4320123039(?!\d)")
-TITLE_INV = re.compile(r"\b(TAX )?INVOICE\b")
-NOT_INV = re.compile(r"\bPRO ?-?FORMA\b|\bQUOTATION\b|\bSTATEMENT\b|\bPURCHASE ORDER\b|\bDELIVERY NOTE\b|\bREMITTANCE\b")
+TITLE_INV = re.compile(r"\b(TAX ?|VAT )?INVOICE\b|\bTAXINVOICE\b")
+STRONG_INV = re.compile(r"\bTAX ?INVOICE\b|\bVAT INVOICE\b|\bINVOICE ?(NO|NUMBER|NR|#)\b|\bINVOICE ?:")
+HARD_NOT = re.compile(r"\bPRO ?-?FORMA\b|\bNOT A (VAT|TAX) INVOICE\b|\bCERTIFICATE\b|\bORDER ACKNOWLEDGE?MENT\b")
+SOFT_NOT = re.compile(r"\bQUOT ?ATION\b|\bSTATEMENT\b|\bPURCHASE ORDER\b|\bDELIVERY NOTE\b|\bREMITTANCE\b|\bJOB CARD\b|\bTERMS (AND|&) CONDITIONS\b")
 NAME_INV = re.compile(r"(?<![A-Z])(INV|INVOICE|SINV|TAX INV)[\s_\-.#]*\d|\bINVOICE\b", re.I)
-MPS_HEAD = re.compile(r"^(\S+\s+){0,6}(MINING PRESSURE (SYSTEMS|SUPPLIES))")
+NAME_NOT = re.compile(r"\bPOP\b|proof of payment|pro ?-?forma|quot|statement", re.I)
+NAME_GROUP = re.compile(r"mining pressure|kusasa|\bpolymer\b|\bMPS\b", re.I)
+MPS_HEAD = re.compile(r"^\W*(\S+\s+){0,1}MINING PRESSURE (SYSTEMS|SUPPLIES)")
 
 
 def classify(sc, pdf):
+    """v2 (09:45): pro formas, quotations, certificates, order acknowledgements, proofs of payment and terms pages out;
+    a tax invoice with a supplier VAT number in MPS's archive counts even when OCR lost the group's name."""
     text = route_sort.text_of(pdf)
     T = presort._title(text)
     B = re.sub(r"\s+", " ", text or "").upper()
     name = f"{sc.get('source_file') or ''} {pdf.name}"
+    f = sc.get("fields") or {}
+    read_as = str(f.get("library_doc_type") or f.get("po_doc_type") or "")
     other_vat = [v for v in dict.fromkeys(presort.VATNO.findall(B)) if v not in presort.OWN_VAT]
-    title_inv = bool(TITLE_INV.search(T)) and not NOT_INV.search(T)
-    name_inv = bool(NAME_INV.search(name)) and not re.search(r"pro ?-?forma|quot|statement", name, re.I)
-    group = bool(GROUP.search(B))
-    if not (title_inv or name_inv):
+    strong = bool(STRONG_INV.search(T))
+    if (HARD_NOT.search(T) or (SOFT_NOT.search(T) and not strong) or NAME_NOT.search(name)
+            or read_as in ("Proof of Payment", "Pro Forma")):
         return "not an invoice", T[:160], other_vat
-    if not group:
-        return "invoice, group not named", T[:160], other_vat
-    if MPS_HEAD.search(T) and not other_vat:
+    if not (TITLE_INV.search(T) or NAME_INV.search(name)):
+        return "not an invoice", T[:160], other_vat
+    if MPS_HEAD.search(T):
         return "mps_issued", T[:160], other_vat
-    return "invoice to the group", T[:160], other_vat
+    if GROUP.search(B) or NAME_GROUP.search(name):
+        return "invoice to the group", T[:160], other_vat
+    if strong and other_vat:
+        return "invoice to the group", T[:160], other_vat       # a supplier's tax invoice in MPS's own order archive
+    return "invoice, group not named", T[:160], other_vat
 
 
 def main():
