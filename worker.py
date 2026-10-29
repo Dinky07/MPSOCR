@@ -1034,6 +1034,93 @@ class Worker:
             flags.append("missing_supplier")
         return fields, flags
 
+    def group_pages(self, staged, folder, src, work, meta, digest, td, outputs):
+        """One file = one document (Dino 29 Oct 2026). staged: one entry per page of a split file. Returns the documents
+        to publish: each order form with its supporting pages (one PDF, order page first), or - no order form - the
+        whole file as one document, unless its first page belongs to another queue (then the whole file goes there)."""
+        import subprocess as _sp
+        forms = {"mps_order", "polymer_order", "internal_group_transfer", "ronin_order"}
+        ents = sorted(staged, key=lambda e: e[0] or 0)
+
+        def is_order(e):
+            f = e[2] or {}
+            return e[5] == "po_v2" and f.get("form") in forms and bool(f.get("order_number"))
+
+        def kind(e):
+            x, f = e[8], e[2] or {}
+            if x.get("_divert"):
+                return x["_divert"].get("kind")
+            if x.get("_ws"):
+                return "workshop_sheet"
+            if x.get("doc_type") == "pop":
+                return "proof_of_payment"
+            if is_order(e):
+                return f.get("form")
+            return f.get("library_doc_type") or f.get("po_doc_type") or "other"
+
+        def summary(e):
+            f = e[2] or {}
+            keep = {k: f.get(k) for k in ("order_number", "supplier", "supplier_name", "account_name", "invoice_number",
+                                          "date", "invoice_date", "total", "amount", "order_value")
+                    if f.get(k) not in (None, "", [], {})}
+            return {"page": e[0], "kind": kind(e), **keep}
+
+        orders = [i for i, e in enumerate(ents) if is_order(e)]
+        if not orders:
+            first, x = ents[0], ents[0][8]
+            ps, dest = dict(x.get("_divert") or x.get("presort") or {}), None
+            if x.get("_divert"):
+                dest = ps.get("dest")
+            elif x.get("_ws") and self.ws_route_ok():
+                dest = "WorkshopSheets"
+                ps = {"kind": "workshop_sheet", "strength": "likely", "signals": [str(x["_ws"])]}
+            elif (first[5] != "pop" and ps.get("strength") in ("sure", "likely") and ps.get("dest")
+                  and ps["dest"] != folder and ps["dest"] in self.types):
+                dest = ps["dest"]
+            if dest and dest in self.types and dest != folder:
+                outputs.append(self.presort_route(work, None, dict(ps, dest=dest), meta, src, folder))
+                log.info("%s %s: no order form; page 1 is %s -> the whole file (%d pages) to %s", folder, src.name,
+                         ps.get("kind"), len(ents), dest)
+                return []
+            segs, mains = [list(range(len(ents)))], [0]
+        else:
+            mains = []
+            for oi in orders:                  # the same order number again (page 2 of a form) is not a new document
+                if mains and ents[mains[-1]][2].get("order_number") == ents[oi][2].get("order_number"):
+                    continue
+                mains.append(oi)
+            segs = [[] for _ in mains]
+            for i in range(len(ents)):         # each page goes with the last order at or before it; leading pages: first
+                k = max([j for j, m in enumerate(mains) if m <= i], default=0)
+                segs[k].append(i)
+        out = []
+        for n, (seg, mi) in enumerate(zip(segs, mains)):
+            page, part, fields, flags, doc_id, extractor, npages, secs, extra = ents[mi]
+            others = [i for i in seg if i != mi]
+            if others:
+                merged = td / f"doc-{n + 1:02d}.pdf"
+                r = _sp.run(["pdfunite", str(part)] + [str(ents[i][1]) for i in others] + [str(merged)],
+                            capture_output=True, text=True, timeout=300)
+                if r.returncode != 0 or not merged.exists():
+                    raise RuntimeError(f"pdfunite failed: {r.stderr[:200]}")
+                fields = dict(fields)
+                sup = [summary(ents[i]) for i in others]
+                fields["supporting"] = sup
+                fields["supporting_text"] = "; ".join(
+                    f"p{x['page']} {str(x['kind']).replace('_', ' ')}" + (f" {x.get('invoice_number') or x.get('order_number') or ''}".rstrip())
+                    for x in sup)[:250]
+                fields["pages"] = 1 + len(others)
+                fields["source_pages"] = ", ".join(str(ents[i][0]) for i in [mi] + others)
+                fields["content_hash"] = sha256(merged).upper()
+                part = merged
+                extra = dict(extra, grouped_pages=[ents[i][0] for i in [mi] + others])
+                secs += sum(ents[i][7] for i in others)
+                log.info("%s %s: p%s %s + supporting pages %s -> one document", folder, src.name, page,
+                         fields.get("order_number") or kind(ents[mi]), ", ".join(str(ents[i][0]) for i in others))
+            extra = {k: v for k, v in extra.items() if not k.startswith("_")}
+            out.append((page, part, fields, flags, doc_id, extractor, npages, secs, extra))
+        return out
+
     def output_stem(self, doc_type, fields, src, page):
         if fields.get("library_doc_type") == "Proof of Payment" and fields.get("account_name"):
             d = str(fields.get("date") or "")
@@ -1099,6 +1186,8 @@ class Worker:
                 else:
                     parts = self.split(work, Path(td), tcfg)
                 presort_futs = self.presort_prefetch(parts, meta, src) if doc_type == "po" and len(parts) > 1 else {}
+                # one file = one document around its order form (Dino 29 Oct): pages grouped before publishing
+                grouping = bool(tcfg.get("group_pages")) and doc_type == "po" and len(parts) > 1
                 staged = []
                 if doc_type == "ws":
                     if not ws_reader:
@@ -1166,6 +1255,10 @@ class Worker:
                         ps = extra.get("presort") or {}
                         if (tcfg.get("presort_gate", True) and ps.get("strength") == "sure" and ps.get("dest")
                                 and ps["dest"] != folder and ps["dest"] in self.types):
+                            if grouping:          # decided with the rest of the file: supporting page or the whole file
+                                staged.append((page, part, {"content_hash": sha256(part).upper()}, [], f"{digest[:16]}-p{page:02d}",
+                                               "presort", 0, time.time() - t0, dict(extra, _divert=ps)))
+                                continue
                             outputs.append(self.presort_route(part, page, ps, meta, src, folder))
                             continue
                         pop_pages, pop_texts, npdf = self.payment_pages(part, tcfg)
@@ -1221,6 +1314,9 @@ class Worker:
                         if first is not None and "not_an_order" in flags and self.ws_route_ok():
                             is_ws, ws_score, ws_why = ws_reader.looks_like_ws(part, meta.get("original_name") or src.name,
                                                                               text=ptext if (ptext or "").strip() else None, po_answer=raw)
+                            if is_ws and grouping:
+                                extra["_ws"] = ws_why            # decided with the rest of the file (one file = one document)
+                                is_ws = False
                             if is_ws:
                                 log.info("%s %s is a workshop sheet (%s): read as one, for Workshop Sheets", folder, src.name, ws_why)
                                 staged += self.read_ws_pages(part, Path(td) / f"ws{page or 0}", meta.get("original_name") or src.name,
@@ -1267,6 +1363,8 @@ class Worker:
                              f" [prompt {tm.get('prompt_tokens')} tok {tm.get('prompt_eval_ms')} ms, answer {tm.get('eval_tokens')} tok {tm.get('eval_ms')} ms]" if tm else "",
                              flags)
 
+                if grouping and staged:
+                    staged = self.group_pages(staged, folder, src, work, meta, digest, Path(td), outputs)
                 # all pages extracted: now publish to out/ (pdf first, json last)
                 for page, part, fields, flags, doc_id, extractor, npages, secs, extra in staged:
                     eff_type = extra.get("doc_type", doc_type)

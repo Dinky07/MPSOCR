@@ -79,7 +79,8 @@
      "startswith": "DF",
      "to": "RoninOrders"
     }
-   ]
+   ],
+   "group_pages": true
   },
   "SupplierInvoices": {
    "doc_type": "supplier_invoice",
@@ -128,7 +129,8 @@
    "split_pages": true,
    "max_pages": 2,
    "command": null,
-   "label": "Polymer Orders"
+   "label": "Polymer Orders",
+   "group_pages": true
   },
   "RoninOrders": {
    "doc_type": "po",
@@ -141,7 +143,8 @@
     {
      "order_number": "^DF\\d{4}$"
     }
-   ]
+   ],
+   "group_pages": true
   },
   "ProofOfPayments": {
    "doc_type": "pop",
