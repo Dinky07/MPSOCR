@@ -35,7 +35,7 @@ try:
 except Exception:                         # pragma: no cover
     ws_reader = None
 
-VERSION = "presort-4 (29 Oct: Ronin orders)"
+VERSION = "presort-4b (29 Oct: Ronin orders)"
 KINDS = {
     "purchase_order": "PurchaseOrders", "polymer_order": "PurchaseOrders", "pro_forma": "PurchaseOrders",
     "quotation": "PurchaseOrders", "statement": "PurchaseOrders", "credit_note": "PurchaseOrders",
@@ -134,11 +134,13 @@ def verdict(pdf, name=None, folder=None, texts=None):
             votes.append(("delivery_note", "likely", "title: MPS delivery note, IN number, no barcode read"))
         else:
             votes.append(("supplier_delivery_note", "likely", "title: delivery note"))
-    ronin_head = has(r"\bRONIN\b", T) and (has(r"\bFLANGES (AND|&) FITTINGS\b", T) or has(r"\b4570132524\b"))
-    ronin_df = re.search(r"\bORDER\s*:?\s*DF\s*-?\s*(\d{4})\b", B)
-    if ronin_head and (ronin_df or has(r"\bORDER\s*:?\s*DF\b", T)):
-        votes.append(("ronin_order", "sure" if ronin_df else "likely",
-                      f"Ronin order form (DF{ronin_df.group(1)})" if ronin_df else "Ronin order form, DF number not read"))
+    ronin_head = (has(r"TILE\s*&\s*ALL\s*BLACK", T) or has(r"\b4570132524\b") or has(r"\bRONIN\b", T)
+                  or has(r"\bFL\w{2,5}S\s+(AND|&)\s+F\w{4,6}S\b", T))
+    ronin_df = re.search(r"\bORDER\s*:?\s*[DP]F\s*-?\s*(\d{4})\b", B)
+    ronin_form = has(r"JUMBO\s*PRESS|\bSIGNATURE\b")
+    if ronin_head and (ronin_df or has(r"\bORDER\s*:?\s*[DP]F\b", B)) and not has(r"\bTAX INVOICE\b|\bSTATEMENT\b|\bCREDIT NOTE\b", T):
+        votes.append(("ronin_order", "sure" if (ronin_df and ronin_form) else "likely",
+                      "Ronin order form" + (f" (ORDER DF {ronin_df.group(1)} as OCR'd)" if ronin_df else ", DF number not read")))
     elif mps_form:
         votes.append(("polymer_order" if has(r"\bPOLYMER LINERS\b|\bPL ?\d{4}\b") else "purchase_order", "likely", "MPS order form wording"))
     elif has(r"\bPOLYMER LINERS\b", T) and has(r"\bORDER\b", T):
