@@ -214,7 +214,8 @@ def harvest(c, limit):
                     elif any(row[k] != v for k, v in parent.items()):
                         update(c, sha, page, **parent)              # regrouped / released / synced since
     # CPU keys for pages that have none yet (text layer or Tesseract on the page cut from its parent)
-    for row in c.execute("SELECT * FROM pages WHERE page_sha IS NULL AND position IS NOT NULL LIMIT ?", (limit,)).fetchall():
+    for row in c.execute("SELECT * FROM pages WHERE (page_sha IS NULL OR IFNULL(kind_source, '') NOT LIKE 'pre-sort (page)%') "
+                         "AND position IS NOT NULL LIMIT ?", (limit,)).fetchall():
         parent = Path(row["parent_json"]).parent / str(row["parent_file"] or "")
         if not parent.is_file():
             continue
@@ -224,8 +225,20 @@ def harvest(c, limit):
                 update(c, row["source_sha"], row["source_page"], page_sha="?")
                 continue
             keys = json.loads(row["keys"] or "{}")
-            keys.update({k: v for k, v in text_keys(page_text(pp)).items() if k not in keys})
-            update(c, row["source_sha"], row["source_page"], page_sha=sha256(pp), keys=json.dumps(keys))
+            text = page_text(pp)
+            keys.update({k: v for k, v in text_keys(text).items() if k not in keys})
+            # what the page is: the pre-sort on the page itself (the order reader only said "not an order" / Other)
+            kind, ks = row["kind"], "pre-sort (page): unsure"
+            try:
+                import presort
+                v = presort.verdict(pp, texts=[text] if text.strip() else None)
+                if v.get("kind") not in (None, "unsure") and v.get("strength") in ("sure", "likely"):
+                    kind, ks = v["kind"], f"pre-sort (page): {v['strength']}"
+            except Exception as e:
+                ks = f"pre-sort (page): error {str(e)[:60]}"
+            if keys.get("jt_number") and str(kind).lower() in ("other", "none", "not an order", "unsure"):
+                kind, ks = "job_transfer", "pre-sort (page): JT number in the text"
+            update(c, row["source_sha"], row["source_page"], page_sha=sha256(pp), keys=json.dumps(keys), kind=kind, kind_source=ks)
             keyed += 1
     c.commit()
     return {"supporting_pages_seen": seen, "new": new, "keyed": keyed}
