@@ -27,7 +27,7 @@ import sidecar_lock                                     # noqa: E402
 ROOT = Path("/srv/ocr/scans/pipeline")
 TYPES = ("PurchaseOrders", "PolymerOrders", "RoninOrders")
 FORMS = {"mps_order", "polymer_order", "internal_group_transfer", "ronin_order"}
-SCRIPT_EDIT = re.compile(r"^(po_autocheck|route_sort|hold_resort|od_sort|requeue_po12|numbers_pass|fix_|supplier rule|ronin_|coalesce_hold|regroup_)", re.I)
+SCRIPT_EDIT = re.compile(r"^(po_autocheck|route_sort|hold_resort|od_sort|requeue_po12|numbers_pass|fix_|supplier rule|ronin_|coalesce_hold|regroup_|\d+-)", re.I)
 
 
 def sha256(p):
