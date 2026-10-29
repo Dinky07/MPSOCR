@@ -1883,7 +1883,7 @@ function recentHtml(list){
 }
 // ---- tabs: Overview + one per document type (the invoice archive sits with Supplier Invoices)
 const TAB_DEFS=[{id:"jt",label:"Job Transfers",types:["JobTransfers"]},{id:"po",label:"Purchase Orders",types:["PurchaseOrders"]},
-  {id:"pl",label:"Polymer Orders",types:["PolymerOrders"]},{id:"pop",label:"Proof of Payments",types:["ProofOfPayments"]},
+  {id:"pl",label:"Polymer Orders",types:["PolymerOrders"]},{id:"ro",label:"Ronin Orders",types:["RoninOrders"]},{id:"pop",label:"Proof of Payments",types:["ProofOfPayments"]},
   {id:"si",label:"Supplier Invoices",types:["SupplierInvoices","SupplierInvoicesArchive"],vat:true},
   {id:"dn",label:"Delivery Notes",types:["DeliveryNotes"]},{id:"ws",label:"Workshop Sheets",types:["WorkshopSheets"]},{id:"tc",label:"Test Certificates",types:["TestCerts"]}];
 let tab=(location.hash||"#overview").slice(1),tabsKey="";
@@ -1959,7 +1959,7 @@ const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_n
   test_cert:[["Cert no","cert_no",0,1],["Family","family"],["Date","date"],["Mill","mill",0,0,"wrap"],["MPS PO","mps_po"],["Ronin PO","ronin_po"],
     ["Type","cert_type"],["Heats","heats_text",0,0,"wrap"],["Checked","checked",0,0,"tick"]]};
 const ALIAS={order_number:"po_number",supplier:"supplier_name"};      // older sidecars (generic reader)
-const DT={SalesQuotes:"sq",OtherDocuments:"od",ReleaseNotes:"rn",SupplierInvoices:"supplier_invoice",SupplierInvoicesArchive:"supplier_invoice",PurchaseOrders:"po",PolymerOrders:"pl",ProofOfPayments:"pop",JobTransfers:"jt",DeliveryNotes:"dn",WorkshopSheets:"ws",TestCerts:"test_cert"};
+const DT={SalesQuotes:"sq",OtherDocuments:"od",ReleaseNotes:"rn",SupplierInvoices:"supplier_invoice",SupplierInvoicesArchive:"supplier_invoice",PurchaseOrders:"po",PolymerOrders:"pl",RoninOrders:"po",ProofOfPayments:"pop",JobTransfers:"jt",DeliveryNotes:"dn",WorkshopSheets:"ws",TestCerts:"test_cert"};
 const money=v=>v==null||v===""?"":(+v).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2});
 function checks(x){
   const f=x.fields||{},c=[];

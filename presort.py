@@ -35,11 +35,12 @@ try:
 except Exception:                         # pragma: no cover
     ws_reader = None
 
-VERSION = "presort-3 (28 Oct)"
+VERSION = "presort-4 (29 Oct: Ronin orders)"
 KINDS = {
     "purchase_order": "PurchaseOrders", "polymer_order": "PurchaseOrders", "pro_forma": "PurchaseOrders",
     "quotation": "PurchaseOrders", "statement": "PurchaseOrders", "credit_note": "PurchaseOrders",
     "supplier_delivery_note": "PurchaseOrders",
+    "ronin_order": "RoninOrders",
     "supplier_invoice": "SupplierInvoices", "delivery_note": "DeliveryNotes", "proof_of_payment": "ProofOfPayments",
     "workshop_sheet": "WorkshopSheets", "job_transfer": "JobTransfers", "test_cert": "TestCerts",
 }
@@ -133,7 +134,12 @@ def verdict(pdf, name=None, folder=None, texts=None):
             votes.append(("delivery_note", "likely", "title: MPS delivery note, IN number, no barcode read"))
         else:
             votes.append(("supplier_delivery_note", "likely", "title: delivery note"))
-    if mps_form:
+    ronin_head = has(r"\bRONIN\b", T) and (has(r"\bFLANGES (AND|&) FITTINGS\b", T) or has(r"\b4570132524\b"))
+    ronin_df = re.search(r"\bORDER\s*:?\s*DF\s*-?\s*(\d{4})\b", B)
+    if ronin_head and (ronin_df or has(r"\bORDER\s*:?\s*DF\b", T)):
+        votes.append(("ronin_order", "sure" if ronin_df else "likely",
+                      f"Ronin order form (DF{ronin_df.group(1)})" if ronin_df else "Ronin order form, DF number not read"))
+    elif mps_form:
         votes.append(("polymer_order" if has(r"\bPOLYMER LINERS\b|\bPL ?\d{4}\b") else "purchase_order", "likely", "MPS order form wording"))
     elif has(r"\bPOLYMER LINERS\b", T) and has(r"\bORDER\b", T):
         votes.append(("polymer_order", "likely", "Polymer order form wording"))

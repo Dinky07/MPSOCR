@@ -57,7 +57,29 @@
      "order_number": "^\\d{5}$"
     }
    ],
-   "proof_of_payment": "keep"
+   "proof_of_payment": "keep",
+   "routes": [
+    {
+     "field": "form",
+     "equals": "polymer_order",
+     "to": "PolymerOrders"
+    },
+    {
+     "field": "order_number",
+     "startswith": "PL",
+     "to": "PolymerOrders"
+    },
+    {
+     "field": "form",
+     "equals": "ronin_order",
+     "to": "RoninOrders"
+    },
+    {
+     "field": "order_number",
+     "startswith": "DF",
+     "to": "RoninOrders"
+    }
+   ]
   },
   "SupplierInvoices": {
    "doc_type": "supplier_invoice",
@@ -107,6 +129,19 @@
    "max_pages": 2,
    "command": null,
    "label": "Polymer Orders"
+  },
+  "RoninOrders": {
+   "doc_type": "po",
+   "split_pages": true,
+   "max_pages": 2,
+   "command": null,
+   "label": "Ronin Orders",
+   "_note": "Ronin Flanges & Fittings orders (DF####), Dino 29 Oct 2026: AP - Authorised Purchase Orders library (StockControl) + MPSBusiness docs.PurchaseOrder",
+   "hold_unless": [
+    {
+     "order_number": "^DF\\d{4}$"
+    }
+   ]
   },
   "ProofOfPayments": {
    "doc_type": "pop",

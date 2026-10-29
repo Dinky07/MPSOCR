@@ -60,6 +60,14 @@ def supplier_vocab():
     return _VOCAB
 
 
+def folder_supplier(source_folder):
+    """The order's original folder is its supplier (Dino 28 Oct 17:25): Melyssa\\Orders-MPS\\2024\\V\\VACUUM SERVICES."""
+    parts = [x for x in re.split(r"[\\/]+", str(source_folder or "")) if x.strip()]
+    if len(parts) >= 3 and not re.fullmatch(r"\d{4}|[A-Z0-9]|ORDERS?.*|MELYSSA|OTHER|EMAIL", parts[-1].strip(), re.I):
+        return parts[-1].strip()
+    return None
+
+
 _RULES, _RULES_KEY = [], None
 
 
@@ -303,12 +311,18 @@ def tidy(d, rel, source_folder=None, source_pdf=None, source_modified=None, sour
     sup = (d.get("supplier") or "").strip()
     if form == "internal_group_transfer" and d.get("transfer_from"):
         sup = d["transfer_from"]
+    # a Ronin order (DF####): Ronin is the buyer printed in the letterhead, never the supplier (Dino 29 Oct)
+    if (form == "ronin_order" or str(on2 or "").startswith("DF")) and re.match(r"^\W*(RFF|RONIN)\b", sup, re.I):
+        chk.append(f"supplier read as {sup}: Ronin is the buyer on a Ronin order, not the supplier")
+        sup = ""
     if OWN.search(sup) and not (form == "internal_group_transfer" and "KUSASA" in sup.upper()) \
             and not (form == "mps_order" and re.match(r"POLYMER\b", sup.upper()) and "LINERS" not in sup.upper()):
         chk.append(f"supplier read as own company ({sup})")
         sup = ""
     d["supplier"] = sup or None
     fsup = file_supplier(base) if form != "internal_group_transfer" else None
+    if fsup and (form == "ronin_order" or str(on2 or "").startswith("DF")) and re.match(r"^\W*(RFF|RONIN)\b", fsup, re.I):
+        fsup = None                                      # a file named after the buyer (RONIN-DF2914-...): not the supplier
     if fsup:
         k1, k2 = re.sub(r"[^A-Z0-9]", "", fsup), re.sub(r"[^A-Z0-9]", "", str(d["supplier"] or "").upper())
         if not k2:
@@ -317,6 +331,12 @@ def tidy(d, rel, source_folder=None, source_pdf=None, source_modified=None, sour
         elif not (k1 in k2 or k2 in k1):
             chk.append(f"file name says supplier {fsup}")
         d["supplier_file"] = fsup
+    dsup = folder_supplier(source_folder) if form != "internal_group_transfer" else None
+    if dsup and not d["supplier"]:
+        d["supplier"] = dsup
+        chk.append(f"supplier not read: {dsup} taken from the order's folder")
+    if dsup:
+        d["supplier_folder"] = dsup
     rule = supplier_rule(d["supplier"]) if d["supplier"] else None
     if rule:
         if d["supplier"] != rule[0]:
