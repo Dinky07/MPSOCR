@@ -283,6 +283,14 @@ def tidy(d, rel, source_folder=None, source_pdf=None, source_modified=None, sour
         on, dig = "A" + m_fa.group(1), m_fa.group(1)
         if not str(d.get("supplier") or "").strip():
             d["supplier"] = "POLYMER"
+    if m_fa and (form == "ronin_order" or on.startswith("DF")) and not re.search(r"(?<![A-Z0-9])DF\d{4}(?!\d)", base.replace(" ", "")) \
+            and (not dig or m_fa.group(1).endswith(dig[-4:])):
+        chk.append(f"MPS order A{m_fa.group(1)} made out to Ronin (read as a Ronin form{', ' + on if on else ''}): taken as an MPS order")
+        form = d["form"] = "mps_order"
+        d["doc_type"] = "purchase_order"
+        on, dig = "A" + m_fa.group(1), m_fa.group(1)
+        if not str(d.get("supplier") or "").strip():
+            d["supplier"] = "RONIN FLANGES & FITTINGS"
     if on.startswith("DF") or form == "ronin_order":
         on2 = "DF" + dig[-4:] if dig else None
     elif on.startswith("PL") or form == "polymer_order" or (len(dig) == 4 and form != "internal_group_transfer"):
@@ -316,7 +324,8 @@ def tidy(d, rel, source_folder=None, source_pdf=None, source_modified=None, sour
         chk.append(f"supplier read as {sup}: Ronin is the buyer on a Ronin order, not the supplier")
         sup = ""
     if OWN.search(sup) and not (form == "internal_group_transfer" and "KUSASA" in sup.upper()) \
-            and not (form == "mps_order" and re.match(r"POLYMER\b", sup.upper()) and "LINERS" not in sup.upper()):
+            and not (form == "mps_order" and re.match(r"POLYMER\b", sup.upper()) and "LINERS" not in sup.upper()) \
+            and not (form == "mps_order" and re.match(r"^\W*(RONIN|RFF)\b", sup.upper())):
         chk.append(f"supplier read as own company ({sup})")
         sup = ""
     d["supplier"] = sup or None
