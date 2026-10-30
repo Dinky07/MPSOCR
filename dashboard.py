@@ -1390,9 +1390,79 @@ ROUTE_LABELS = {"JobTransfers": "Job Transfers", "PurchaseOrders": "Purchase Ord
 
 
 def route_targets(cfg):
-    """The queues a held document can be sent to from the dashboard (336): every queue the worker reads."""
-    return [{"type": k, "label": ROUTE_LABELS.get(k) or v.get("label") or k}
-            for k, v in cfg["doc_types"].items() if v.get("doc_type") not in ROUTE_NOT]
+    """The queues a document can be sent to from the dashboard (336): every queue the worker reads, and Other
+    Documents (340: straight to its out queue, with a category and a summary)."""
+    out = [{"type": k, "label": ROUTE_LABELS.get(k) or v.get("label") or k}
+           for k, v in cfg["doc_types"].items() if v.get("doc_type") not in ROUTE_NOT]
+    if "OtherDocuments" in cfg["doc_types"]:
+        out.append({"type": "OtherDocuments", "label": "Other Documents", "categories": od_categories(cfg)})
+    return out
+
+
+_ODCATS = {"at": 0.0, "cats": []}
+
+
+def od_categories(cfg):
+    """Other Documents categories in use (its library folders), most used first; read again every 10 minutes."""
+    if time.time() - _ODCATS["at"] > 600:
+        root, c = Path(cfg["root"]), {}
+        for p in list((root / "out" / "OtherDocuments").glob("*.json")) + list((root / "synced" / "OtherDocuments").glob("*/*.json")):
+            k = ((read_json(p) or {}).get("fields") or {}).get("od_category")
+            if k:
+                c[k] = c.get(k, 0) + 1
+        _ODCATS.update(at=time.time(), cats=[k for k, _ in sorted(c.items(), key=lambda kv: -kv[1])])
+    return _ODCATS["cats"]
+
+
+def move_to_od(cfg, root, t, name, js, side, pdf, on_hold, body):
+    """To the Other Documents out queue (340), as od_add / route_sort put documents there."""
+    cat = re.sub(r'[\\/:*?"<>|#%]+', " ", str(body.get("category") or "")).strip()[:60]
+    if not cat:
+        raise ValueError("choose a category (its folder in Other Documents)")
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+    import od_sort, route_sort
+    vcfg = {"model": "qwen2.5vl:7b", "ollama_url": cfg.get("ollama_url", "http://127.0.0.1:11434"), "num_ctx": int(cfg.get("num_ctx", 49152))}
+    note, ex = None, ThreadPoolExecutor(max_workers=1)
+    try:
+        s = ex.submit(lambda: od_sort.summarise(pdf, route_sort.text_of(pdf), vcfg)).result(timeout=90) or {}
+    except FutureTimeout:
+        s, note = {}, "summary not made (the model was busy): add one in SharePoint"
+    except Exception as e:
+        s, note = {}, f"summary not made: {str(e)[:120]}"
+    finally:
+        ex.shutdown(wait=False)
+    f = side.get("fields") or {}
+    stamp = datetime.now().isoformat(timespec="seconds")
+    fields = {"summary": s.get("summary"), "od_doc_type": s.get("doc_type"), "od_from": s.get("from"),
+              "date": s.get("date") or f.get("date") or f.get("invoice_date"),
+              "order_number": s.get("order_number") or f.get("order_number"), "job_number": s.get("job_number") or f.get("job_number"),
+              "od_category": cat, "od_rule": "dashboard (Move to)", "od_evidence": "",
+              "moved_from": f"{t} ({'on hold' if on_hold else 'queue'})", "content_hash": hashlib.sha256(pdf.read_bytes()).hexdigest().upper(),
+              "review": note, "library_doc_type": "Other Document"}
+    dest = root / "out" / "OtherDocuments"
+    dest.mkdir(parents=True, exist_ok=True)
+    new, k = pdf.name, 2
+    while (dest / new).exists() or (dest / (Path(new).stem + ".json")).exists():
+        new, k = f"{pdf.stem}_{k}{pdf.suffix}", k + 1
+    sc = {"schema_version": 1, "doc_id": side.get("doc_id"), "doc_type": "other_doc", "folder": "OtherDocuments", "file": new,
+          "source_file": side.get("source_file"), **({"source_folder": side["source_folder"]} if side.get("source_folder") else {}),
+          "source_sha256": side.get("source_sha256"), "source_page": side.get("source_page"), "processed_at": side.get("processed_at"),
+          "model": "qwen2.5vl:7b (summary)", "extractor": "dashboard", "needs_review": bool(note), "flags": [], "fields": fields,
+          "previous": {"folder": t, "sidecar": f"out/{t}/{'hold/' if on_hold else ''}{name}", "doc_type": side.get("doc_type"), "fields": f},
+          "edits": (side.get("edits") or []) + [{"at": stamp, "by": "dashboard (Move to)", "changes": [{"field": "folder", "old": t, "new": "OtherDocuments"}]}]}
+    shutil.copy2(pdf, dest / (new + ".part"))
+    os.replace(dest / (new + ".part"), dest / new)                 # PDF first, JSON last: the PC only takes complete pairs
+    tmp = dest / (Path(new).stem + ".json.tmp")
+    tmp.write_text(json.dumps(sc, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    os.replace(tmp, dest / (Path(new).stem + ".json"))
+    gone = root / "deleted" / t / datetime.now().strftime("%Y-%m")
+    gone.mkdir(parents=True, exist_ok=True)
+    for q in (pdf, Path(str(js) + ".attempts"), js):
+        if q.is_file():
+            shutil.move(str(q), str(free_name(gone, q.name)))
+    (gone / (Path(name).stem + ".rerouted.json")).write_text(json.dumps(
+        {"to": f"out/OtherDocuments/{new}", "at": stamp, "by": "dashboard", "read_as": t, "category": cat}), encoding="utf-8")
+    return {"ok": True, "to": "OtherDocuments", "name": new, "summary": bool(fields["summary"])}
 
 
 def reroute_doc(cfg, root, t, body):
@@ -1413,6 +1483,8 @@ def reroute_doc(cfg, root, t, body):
     pdf = held / str(side.get("file") or "")
     if not side.get("file") or not pdf.is_file():
         raise ValueError("the document's PDF is missing")
+    if dest == "OtherDocuments":
+        return move_to_od(cfg, root, t, name, js, side, pdf, on_hold, body)
     src = str(side.get("source_file") or pdf.name)
     indir, meta_dir = root / "in" / dest, root / "in" / dest / "_meta"
     indir.mkdir(parents=True, exist_ok=True)
@@ -2435,8 +2507,13 @@ $("#outq").addEventListener("change",async e=>{
     if(cf.value)outOpen.add("held|"+t);cf.blur();loadOut();return}
   const rs=e.target.closest("select.route");
   if(rs){const to=rs.value;if(!to)return;const lbl=rs.options[rs.selectedIndex].text;
-    if(!confirm("Move "+rs.dataset.name+" to "+lbl+"? It is read again there; this copy goes to pipeline/deleted.")){rs.value="";rs.blur();return}
-    rs.disabled=true;await act({action:"reroute",type:rs.dataset.type,name:rs.dataset.name,held:rs.dataset.held=="1",dest:to},"Moved to "+lbl+": it will be read again there");
+    let cat=null;
+    if(to=="OtherDocuments"){const cats=(ROUTE.find(r=>r.type==to)||{}).categories||[];
+      cat=(prompt("Move "+rs.dataset.name+" to Other Documents.\nCategory (its folder in the library) - in use: "+cats.join(", "),cats[0]||"")||"").trim();
+      if(!cat){rs.value="";rs.blur();return}
+      toast("Summarising it for Other Documents (up to a minute or so)…")}
+    else if(!confirm("Move "+rs.dataset.name+" to "+lbl+"? It is read again there; this copy goes to pipeline/deleted.")){rs.value="";rs.blur();return}
+    rs.disabled=true;await act({action:"reroute",type:rs.dataset.type,name:rs.dataset.name,held:rs.dataset.held=="1",dest:to,category:cat},to=="OtherDocuments"?"Moved to Other Documents ("+cat+")":"Moved to "+lbl+": it will be read again there");
     rs.blur();loadOut();return}
   const us=e.target.closest("select[data-c=price_unit]");
   if(us&&us.value=="__add__"){
