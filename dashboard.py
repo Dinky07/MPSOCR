@@ -784,7 +784,43 @@ def _sort_files(files, key, desc):
     return [e for _, e in full] + blank
 
 
-def out_queue(cfg, t, limit=300, sorts=None):
+def check_kind(flag):
+    """A flag as a check type for the queue filter (338): numbers, quoted values and names in capitals taken out."""
+    s, pre = str(flag or "").strip(), ""
+    for p in ("held: ", "check: "):
+        if s.startswith(p):
+            pre, s = p, s[len(p):]
+            break
+    s = re.sub(r"(?<!\w)'[^']*'|\"[^\"]*\"", "…", s)
+    if pre:
+        s = re.split(r"[:(;]| - ", s)[0]
+    s = re.sub(r"\b[A-Z]{0,3}\d[\w./-]*", "#", s)
+    s = re.sub(r"\b[A-Z][A-Z&-]{3,}(?:'S)?(?:\s+[A-Z][A-Z&-]{3,}(?:'S)?)*\b", "…", s)
+    s = re.sub(r"\s+", " ", s.replace("_", " ") if not pre else s).strip(" .,")
+    return (pre + s)[:80] if s else pre.strip()
+
+
+_KINDS = {}
+
+
+def _check_kinds(e):
+    """The check types of one queued document, cached by file modification time."""
+    try:
+        m = e.stat().st_mtime_ns
+    except OSError:
+        return ()
+    c = _KINDS.get(e.path)
+    if c and c[0] == m:
+        return c[1]
+    doc = read_json(e.path) or {}
+    ks = tuple(sorted({check_kind(f) for f in (doc.get("flags") or []) if str(f).strip()}))
+    if len(_KINDS) > 60000:
+        _KINDS.clear()
+    _KINDS[e.path] = (m, ks)
+    return ks
+
+
+def out_queue(cfg, t, limit=300, sorts=None, check=None):
     if t not in cfg["doc_types"]:
         raise ValueError("unknown type")
     import csv
@@ -811,6 +847,15 @@ def out_queue(cfg, t, limit=300, sorts=None):
         except FileNotFoundError:
             continue
         res[key + "_total"] = len(files)
+        kinds_of = {e.path: _check_kinds(e) for e in files}
+        cnt = {}
+        for ks in kinds_of.values():
+            for k in ks:
+                cnt[k] = cnt.get(k, 0) + 1
+        res.setdefault("checks", {})[key] = sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))[:60]
+        if check:
+            files = [e for e in files if check in kinds_of[e.path]]
+            res[key + "_matched"] = len(files)
         sk, sd = (sorts or {}).get(key) or (None, False)
         if sk and re.fullmatch(r"_?[a-z0-9_]{1,40}", sk):
             files = _sort_files(files, sk, sd)
@@ -1611,7 +1656,7 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/out":
                     g = lambda n: q.get(n, [""])[0]
                     sorts = {"ready": (g("sort") or None, g("dir") == "desc"), "held": (g("hsort") or None, g("hdir") == "desc")}
-                    return self.send(200, out_queue(cfg, t, sorts=sorts))
+                    return self.send(200, out_queue(cfg, t, sorts=sorts, check=g("check") or None))
                 if path == "/api/preview":
                     return self.send(200, preview_png(cfg, t, name, q.get("held", ["0"])[0] == "1"), "image/png")
                 p = out_pdf(cfg, t, name, q.get("held", ["0"])[0] == "1")
@@ -1820,6 +1865,7 @@ body.pvon main{margin-right:var(--pvw)}
 .pvbody{flex:1;overflow:auto;padding:8px;background:var(--chip)}#pv img{display:block;width:100%;height:auto;background:#fff;border-radius:4px}
 #pvtoggle.on{background:var(--accent);border-color:var(--accent);color:#fff}
 @media (max-width:900px){#pv{width:100vw;top:auto;height:55vh;border-left:0;border-top:1px solid var(--line)}body.pvon main{margin-right:0;margin-bottom:55vh}}
+select.chkf{max-width:min(420px,100%)}
 table.q.fixed{table-layout:fixed}table.q.fixed td{overflow:hidden;text-overflow:ellipsis}
 table.q th .rz{position:absolute;top:0;right:0;width:8px;height:100%;cursor:col-resize;z-index:3}
 table.q th .rz:hover,table.q th .rz.on{background:var(--accent);opacity:.35}
@@ -2025,11 +2071,11 @@ function renderJob(d,t){
 }
 // ---- out queue + Sync now (job tabs). The list is fetched on tab open, after actions and every 10 s.
 let outKey="",outData={},outOpen=new Set(),outTimer=null;
-const outSort={},outScrollReset=new Set();      // "<type>|r" / "<type>|h" -> {k: column key, d: "asc"|"desc"}: header clicks
+const outSort={},outCheck={},outScrollReset=new Set();      // "<type>|r" / "<type>|h" -> {k: column key, d: "asc"|"desc"}: header clicks
 async function loadOut(){
   const types=outKey?outKey.split(","):[];
   try{for(const t of types){const sr=outSort[t+"|r"],sh=outSort[t+"|h"];
-    const qs=(sr?`&sort=${encodeURIComponent(sr.k)}&dir=${sr.d}`:"")+(sh?`&hsort=${encodeURIComponent(sh.k)}&hdir=${sh.d}`:"");
+    const qs=(sr?`&sort=${encodeURIComponent(sr.k)}&dir=${sr.d}`:"")+(sh?`&hsort=${encodeURIComponent(sh.k)}&hdir=${sh.d}`:"")+(outCheck[t]?"&check="+encodeURIComponent(outCheck[t]):"");
     const r=await fetch("/api/out?type="+encodeURIComponent(t)+qs);if(r.status==401)return location.reload();outData[t]=await r.json();if(outData[t].writers)WRITERS=outData[t].writers;if(outData[t].route_to)ROUTE=outData[t].route_to;if(outData[t].units)UNITS=outData[t].units}}
   catch(e){}
   renderOut();clearTimeout(outTimer);outTimer=setTimeout(()=>{if(tab!="overview")loadOut()},10000)}
@@ -2299,7 +2345,7 @@ function syncStatus(d,ty){
 function renderOut(force){
   const d=last;if(!d||tab=="overview"||tab=="train")return;
   if(editing&&!force)return;           // keep the inputs; the list refreshes after Save / Cancel
-  if(!force&&document.activeElement&&document.activeElement.matches("select.route"))return;   // a Move to... list is open
+  if(!force&&document.activeElement&&document.activeElement.matches("select.route,select.chkf"))return;   // a Move to... list is open
   if(!force&&colDrag)return;                                                                  // a column is being resized
   const types=outKey.split(",");
   const keep={};$("#outq").querySelectorAll(".qscroll[data-qs]").forEach(el=>{if(!outScrollReset.has(el.dataset.qs))keep[el.dataset.qs]=[el.scrollTop,el.scrollLeft]});
@@ -2317,9 +2363,15 @@ function renderOut(force){
     return `<section class="card"><div class="qhead"><h2>Out queue: ${esc(ty.label)} (${n} ready${q&&q.held_total?`, ${q.held_total} on hold`:""})</h2>
       ${q&&q.ready.length?`<button data-act="expand" data-type="${esc(t)}">${q.ready.every(x=>outOpen.has(t+"|r|"+x.name))?"Collapse all":"Expand all"}</button>`:""}
       ${Object.keys(cw).length?`<button data-act="resetw" data-type="${esc(t)}" title="Automatic column widths again">Reset widths</button>`:""}
+      ${q&&q.checks?(()=>{const m=new Map();for(const l of ["ready","held"])for(const [k,n] of (q.checks[l]||[]))m.set(k,(m.get(k)||0)+n);
+        const o=[...m.entries()].sort((a,b)=>b[1]-a[1]||(a[0]<b[0]?-1:1)),cur=outCheck[t]||"";
+        return `<select class="chkf" data-type="${esc(t)}" title="Show only documents with this check (over the whole queue)"><option value="">All checks</option>`+
+          o.map(([k,n])=>`<option value="${esc(k)}" ${cur==k?"selected":""}>${esc(k)} (${n})</option>`).join("")+
+          (cur&&!m.has(cur)?`<option value="${esc(cur)}" selected>${esc(cur)} (0)</option>`:"")+`</select>`})():""}
       ${ty.sync_requested&&!ty.sync_running?`<button data-act="cancel_sync" data-type="${esc(t)}">Cancel request</button>`:""}
       <button class="primary" data-act="sync_now" data-type="${esc(t)}" ${can?"":"disabled"}>Sync ${n} to SharePoint &amp; SQL</button></div>
       ${syncStatus(d,ty)}
+      ${outCheck[t]&&q?`<div class="qstat warn">Only documents with “${esc(outCheck[t])}”: ${q.ready_matched??0} ready, ${q.held_matched??0} on hold. <button data-act="clearchk" data-type="${esc(t)}">Show all</button></div>`:""}
       ${!q?`<div class="small muted">Loading…</div>`:q.ready.length?`<div class="scroll qscroll" data-qs="${esc(t)}|r"><table class="q${tfix}" data-type="${esc(t)}"><thead>${head("r")}</thead><tbody>${docRows(t,q.ready,false)}</tbody></table></div>
         ${q.ready_total>q.ready.length?`<div class="small muted">Showing the ${outSort[t+"|r"]?"first":"oldest"} ${q.ready.length} of ${q.ready_total}${outSort[t+"|r"]?" (sorted over all of them)":""}.</div>`:""}`
         :`<div class="small muted">Nothing waiting to sync.</div>`}
@@ -2368,6 +2420,7 @@ $("#outq").addEventListener("click",async e=>{
     b.disabled=true;await act({action:"delete",type:b.dataset.type,name:b.dataset.name},"Deleted");loadOut();return}
   if(b){e.stopPropagation();const a=b.dataset.act,t=b.dataset.type;
     if(a=="resetw"){delete COLW[t];saveColw();renderOut(true);return}
+    if(a=="clearchk"){delete outCheck[t];loadOut();return}
     if(a=="expand"){const q=outData[t];if(!q)return;const ids=q.ready.map(x=>t+"|r|"+x.name),all=ids.every(i=>outOpen.has(i));
       ids.forEach(i=>all?outOpen.delete(i):outOpen.add(i));renderOut();return}
     if(a=="sync_now"&&!confirm("Upload everything in the "+t+" out queue to SharePoint and SQL?"))return;
@@ -2376,6 +2429,9 @@ $("#outq").addEventListener("click",async e=>{
     {const [pt,hr,...rest]=id.split("|"),nm=rest.join("|"),ph=hr=="h",pq=outData[pt];pvShow(pt,pq&&(ph?pq.held:pq.ready).find(d=>d.name==nm),ph)}
     outOpen.has(id)?outOpen.delete(id):outOpen.add(id);renderOut()}});
 $("#outq").addEventListener("change",async e=>{
+  const cf=e.target.closest("select.chkf");
+  if(cf){const t=cf.dataset.type;cf.value?outCheck[t]=cf.value:delete outCheck[t];outScrollReset.add(t+"|r");outScrollReset.add(t+"|h");
+    if(cf.value)outOpen.add("held|"+t);cf.blur();loadOut();return}
   const rs=e.target.closest("select.route");
   if(rs){const to=rs.value;if(!to)return;const lbl=rs.options[rs.selectedIndex].text;
     if(!confirm("Move "+rs.dataset.name+" to "+lbl+"? It is read again there; the held copy goes to pipeline/deleted.")){rs.value="";rs.blur();return}
