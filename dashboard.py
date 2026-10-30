@@ -2264,7 +2264,7 @@ function spHtml(x,q){
 function docRows(t,list,held){
   const cols=COLS[DT[t]]||COLS.supplier_invoice;
   return list.map(x=>{const f=x.fields||{},id=t+"|"+(held?"h|":"r|")+x.name,open=outOpen.has(id);
-    const pdf=x.pdf?`<a class="btn" target="_blank" rel="noopener" href="/api/pdf?type=${encodeURIComponent(t)}&name=${encodeURIComponent(x.file)}${held?"&held=1":""}" onclick="event.stopPropagation()">PDF</a>`:"";
+    const pdf=x.pdf?`<a class="btn" target="_blank" rel="noopener" href="/api/preview?type=${encodeURIComponent(t)}&name=${encodeURIComponent(x.file)}${held?"&held=1":""}" onclick="event.stopPropagation()" title="First page as an image, in a new tab (the whole PDF: Whole PDF in the preview pane)">Image</a>`:"";
     const btn=`<button data-act="${held?"release":"hold"}" data-type="${esc(t)}" data-name="${esc(x.name)}">${held?"Release":"Hold"}</button>`
       +(held?` <button class="danger" data-act="delete" data-type="${esc(t)}" data-name="${esc(x.name)}" title="Take it out of the pipeline (kept in pipeline/deleted for recovery)">Delete</button>`:"")
       +(held&&ROUTE.length?` <select class="route" data-type="${esc(t)}" data-name="${esc(x.name)}" onclick="event.stopPropagation()" title="Wrong kind of document? Send it to the right queue: that queue's reader reads it again"><option value="">Move to…</option>${ROUTE.filter(r=>r.type!=t).map(r=>`<option value="${esc(r.type)}">${esc(r.label)}</option>`).join("")}</select>`:"");
