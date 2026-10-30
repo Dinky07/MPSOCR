@@ -804,7 +804,7 @@ def out_queue(cfg, t, limit=300, sorts=None):
     sap = sage_ap(root) if cfg["doc_types"][t].get("doc_type") == "supplier_invoice" or t.startswith("SupplierInvoices") else None
     spo = sage_po(root) if t == "PolymerOrders" else None
     res = {"type": t, "ready": [], "held": [], "ready_total": 0, "held_total": 0, "limit": limit, "sp_map": bool(tmap), "writers": writers(cfg), "units": units(cfg),
-           "sage_rows": sap["rows"] if sap else None, "sage_at": sap.get("at") if sap else None}
+           "sage_rows": sap["rows"] if sap else None, "sage_at": sap.get("at") if sap else None, "route_to": route_targets(cfg)}
     for key, d in (("ready", root / "out" / t), ("held", root / "out" / t / "hold")):
         try:
             files = sorted((e for e in os.scandir(d) if e.is_file() and e.name.endswith(".json")), key=lambda e: e.stat().st_mtime)
@@ -853,6 +853,28 @@ def out_pdf(cfg, t, name, held):
     if p.suffix.lower() != ".pdf":
         raise ValueError("not a PDF")
     return p
+
+
+PREVIEW_DIR = Path("/tmp/mps-dash-preview")
+
+
+def preview_png(cfg, t, name, held):
+    """Page 1 of a queued document as a PNG for the preview pane (336); cached by file, size and modification time."""
+    p = out_pdf(cfg, t, name, held)
+    st = p.stat()
+    PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha1(f"{p}|{st.st_size}|{st.st_mtime_ns}".encode()).hexdigest()[:20]
+    png = PREVIEW_DIR / f"{key}.png"
+    if not png.exists():
+        tmp = PREVIEW_DIR / f"{key}.part"
+        rc, out, err = run(["pdftoppm", "-png", "-scale-to", "1700", "-f", "1", "-l", "1", "-singlefile", str(p), str(tmp)], 60)
+        made = Path(str(tmp) + ".png")
+        if rc != 0 or not made.exists():
+            raise ValueError(f"no preview: {(err or '').strip()[:160]}")
+        os.replace(made, png)
+        for x in sorted(PREVIEW_DIR.glob("*.png"), key=lambda x: x.stat().st_mtime)[:-400]:
+            x.unlink(missing_ok=True)
+    return png.read_bytes()
 
 
 # fields that can be edited on the dashboard, per document type (anything else in the request is ignored)
@@ -1317,13 +1339,68 @@ def free_name(directory, name):
     return p
 
 
+ROUTE_NOT = {"other_doc", "sales_quote"}       # filled by od_sort / route_sort, not read by the worker
+ROUTE_LABELS = {"JobTransfers": "Job Transfers", "PurchaseOrders": "Purchase Orders", "SupplierInvoices": "Supplier Invoices",
+                "SupplierInvoicesArchive": "Supplier Invoices (archive)", "DeliveryNotes": "Delivery Notes"}
+
+
+def route_targets(cfg):
+    """The queues a held document can be sent to from the dashboard (336): every queue the worker reads."""
+    return [{"type": k, "label": ROUTE_LABELS.get(k) or v.get("label") or k}
+            for k, v in cfg["doc_types"].items() if v.get("doc_type") not in ROUTE_NOT]
+
+
+def reroute_doc(cfg, root, t, body):
+    """A held document read as the wrong kind: the PDF goes to in/<dest>/ (with a _meta note) to be read again by that
+    queue's reader; the held copy moves to deleted/<t>/<yyyy-mm>/ with a .rerouted.json note."""
+    dest = str(body.get("dest") or "")
+    if dest == t or dest not in {r["type"] for r in route_targets(cfg)}:
+        raise ValueError("can't move it to that queue")
+    held = root / "out" / t / "hold"
+    name = str(body.get("name") or "")
+    if not name.endswith(".json") or not (held / name).is_file():
+        raise ValueError("only documents on hold can be moved (Hold it first)")
+    js = safe_child(held, name)
+    if Path(str(js) + ".uploaded").exists():
+        raise ValueError("already uploaded to SharePoint")
+    side = read_json(js) or {}
+    pdf = held / str(side.get("file") or "")
+    if not side.get("file") or not pdf.is_file():
+        raise ValueError("the document's PDF is missing")
+    src = str(side.get("source_file") or pdf.name)
+    indir, meta_dir = root / "in" / dest, root / "in" / dest / "_meta"
+    indir.mkdir(parents=True, exist_ok=True)
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    stem = re.sub(r'[\\/:*?"<>|#%]+', " ", Path(src).stem)[:120].strip() or pdf.stem
+    base = stem + (f"_p{side['source_page']}" if side.get("source_page") else "")
+    name_in, k = base + ".pdf", 2
+    while (indir / name_in).exists() or (meta_dir / (name_in + ".json")).exists():
+        name_in, k = f"{base}_{k}.pdf", k + 1
+    stamp = datetime.now().isoformat(timespec="seconds")
+    meta = {"original_name": src, "rerouted_from": f"out/{t}/hold/{name} (dashboard)", "routed_at": stamp, "routed_by": "dashboard"}
+    for key in ("source_folder", "source_modified"):
+        if side.get(key):
+            meta[key] = side[key]
+    (meta_dir / (name_in + ".json")).write_text(json.dumps(meta, indent=1), encoding="utf-8")   # the note before the PDF
+    shutil.copy2(pdf, indir / (name_in + ".part"))                                             # the worker skips .part
+    os.replace(indir / (name_in + ".part"), indir / name_in)
+    gone = root / "deleted" / t / datetime.now().strftime("%Y-%m")
+    gone.mkdir(parents=True, exist_ok=True)
+    for q in (pdf, Path(str(js) + ".attempts"), js):
+        if q.is_file():
+            shutil.move(str(q), str(free_name(gone, q.name)))
+    (gone / (Path(name).stem + ".rerouted.json")).write_text(json.dumps(
+        {"to": f"in/{dest}/{name_in}", "at": stamp, "by": "dashboard", "read_as": t, "source_file": src}), encoding="utf-8")
+    return {"ok": True, "to": dest, "name": name_in}
+
+
 def do_action(cfg, body):
     """Document actions take the sidecar's lock first (review F10, 28 Oct): the PC sync holds it while it uploads
     and moves the pair, the numbers pass and the import while they rewrite it."""
     a, t, name = body.get("action"), body.get("type"), str(body.get("name") or "")
-    if a in ("edit", "check", "delete", "hold", "release") and name and t in cfg.get("doc_types", {}):
+    if a in ("edit", "check", "delete", "hold", "release", "reroute") and name and t in cfg.get("doc_types", {}):
         d = Path(cfg["root"]) / "out" / t
-        js = (d / "hold" / name) if (a in ("delete", "release") or (a not in ("hold",) and body.get("held"))) else (d / name)
+        js = (d / "hold" / name) if (a in ("delete", "release", "reroute") or (a not in ("hold",) and body.get("held"))) else (d / name)
         try:
             with sidecar_lock.locked(js, "dashboard", wait=15):
                 return _do_action(cfg, body)
@@ -1409,6 +1486,9 @@ def _do_action(cfg, body):
         (dest / (Path(name).stem + ".deleted.json")).write_text(json.dumps({"name": name, "at": side["deleted_at"],
                                                                          "source_file": side.get("source_file")}), encoding="utf-8")
         return {"ok": True}
+
+    if a == "reroute":
+        return reroute_doc(cfg, root, t, body)
 
     if a == "check":
         # the reviewer's tick (training sheet "Checked"); goes to the PO library's Checked column on sync
@@ -1524,7 +1604,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(401, {"error": "login required"})
         if path == "/api/status":
             return self.send(200, status(cfg))
-        if path in ("/api/out", "/api/pdf"):
+        if path in ("/api/out", "/api/pdf", "/api/preview"):
             q = parse_qs(urlparse(self.path).query)
             t, name = q.get("type", [""])[0], q.get("name", [""])[0]
             try:
@@ -1532,6 +1612,8 @@ class Handler(BaseHTTPRequestHandler):
                     g = lambda n: q.get(n, [""])[0]
                     sorts = {"ready": (g("sort") or None, g("dir") == "desc"), "held": (g("hsort") or None, g("hdir") == "desc")}
                     return self.send(200, out_queue(cfg, t, sorts=sorts))
+                if path == "/api/preview":
+                    return self.send(200, preview_png(cfg, t, name, q.get("held", ["0"])[0] == "1"), "image/png")
                 p = out_pdf(cfg, t, name, q.get("held", ["0"])[0] == "1")
                 safe = re.sub(r'[^\w .()\-]', "_", p.name)
                 return self.send(200, p.read_bytes(), "application/pdf", {"Content-Disposition": f'inline; filename="{safe}"'})
@@ -1728,8 +1810,22 @@ select{font:inherit;padding:5px 8px;border-radius:7px;border:1px solid var(--lin
 .toast.show{opacity:1}
 .scroll{overflow-x:auto}
 @media (max-width:640px){.hide-sm{display:none}}
+/* 336: column widths set by dragging a heading edge */
+/* 336: preview pane (page 1 of the document clicked) */
+:root{--pvw:clamp(380px,40vw,1100px)}
+#pv{position:fixed;right:0;bottom:0;top:var(--pvtop,100px);width:var(--pvw);background:var(--card);border-left:1px solid var(--line);z-index:4;display:flex;flex-direction:column}
+body.pvon main{margin-right:var(--pvw)}
+.pvbar{display:flex;gap:8px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line)}
+.pvbar span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pvbody{flex:1;overflow:auto;padding:8px;background:var(--chip)}#pv img{display:block;width:100%;height:auto;background:#fff;border-radius:4px}
+#pvtoggle.on{background:var(--accent);border-color:var(--accent);color:#fff}
+@media (max-width:900px){#pv{width:100vw;top:auto;height:55vh;border-left:0;border-top:1px solid var(--line)}body.pvon main{margin-right:0;margin-bottom:55vh}}
+table.q.fixed{table-layout:fixed}table.q.fixed td{overflow:hidden;text-overflow:ellipsis}
+table.q th .rz{position:absolute;top:0;right:0;width:8px;height:100%;cursor:col-resize;z-index:3}
+table.q th .rz:hover,table.q th .rz.on{background:var(--accent);opacity:.35}
 </style></head><body>
 <div class="top"><header><h1>MPS OCR pipeline</h1><span class="sub" id="upd">loading…</span>
+<button id="pvtoggle" title="Show the first page of the document you click, beside the queue">Preview</button>
 <button id="logout">Sign out</button></header><nav class="tabs" id="tabs"></nav></div>
 <main id="tab-overview">
 <section class="grid" id="health"></section>
@@ -1766,6 +1862,7 @@ select{font:inherit;padding:5px 8px;border-radius:7px;border:1px solid var(--lin
 <div class="card" id="tracc"></div><div class="card" id="trrep"></div></section>
 </main>
 <div class="toast" id="toast"></div>
+<aside id="pv" hidden><div class="pvbar"><span class="small" id="pvname">Click a document to see its first page</span><a class="btn" id="pvpdf" target="_blank" rel="noopener" hidden>Whole PDF</a><button id="pvclose" title="Close the preview">✕</button></div><div class="pvbody"><img id="pvimg" alt=""></div></aside>
 <script>
 const CSRF="__CSRF__";
 const $=s=>document.querySelector(s);
@@ -1933,7 +2030,7 @@ async function loadOut(){
   const types=outKey?outKey.split(","):[];
   try{for(const t of types){const sr=outSort[t+"|r"],sh=outSort[t+"|h"];
     const qs=(sr?`&sort=${encodeURIComponent(sr.k)}&dir=${sr.d}`:"")+(sh?`&hsort=${encodeURIComponent(sh.k)}&hdir=${sh.d}`:"");
-    const r=await fetch("/api/out?type="+encodeURIComponent(t)+qs);if(r.status==401)return location.reload();outData[t]=await r.json();if(outData[t].writers)WRITERS=outData[t].writers;if(outData[t].units)UNITS=outData[t].units}}
+    const r=await fetch("/api/out?type="+encodeURIComponent(t)+qs);if(r.status==401)return location.reload();outData[t]=await r.json();if(outData[t].writers)WRITERS=outData[t].writers;if(outData[t].route_to)ROUTE=outData[t].route_to;if(outData[t].units)UNITS=outData[t].units}}
   catch(e){}
   renderOut();clearTimeout(outTimer);outTimer=setTimeout(()=>{if(tab!="overview")loadOut()},10000)}
 const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_number",0,1],["Date","invoice_date"],["Total","total",1]],
@@ -2046,7 +2143,32 @@ const LINECOLS={po:[["Qty","quantity",1],["Description","description"],["Unit pr
   release_note:[["Qty","qty",1],["Item ref","item_ref"],["Mark no","mark_no"],["Description","description"]],
   test_cert:[["Family","family"],["Product","product"],["Description","description"],["Size as printed","size_text"],["NB","size_nb",1],
     ["Sch / WT","schedule"],["Class","class"],["Grade","grade"],["Ends","ends"],["Length m","length_m",1],["Qty","qty",1],["Unit","unit"],["Heat no","heat_no"]]};
-let editing=null,WRITERS=[],UNITS=[["each","ea"],["kg","PKG"],["litre","/L"],["length","PLEN"],["metre","PM"],["lot","lot"]];
+let COLW={};try{COLW=JSON.parse(localStorage.getItem("mps.colw")||"{}")||{}}catch(e){}
+function saveColw(){try{localStorage.setItem("mps.colw",JSON.stringify(COLW))}catch(e){}}
+function applyColw(t){const cw=COLW[t]||{},sum=Object.values(cw).reduce((a,b)=>a+b,0);
+  document.querySelectorAll("table.q[data-type]").forEach(tb=>{if(tb.dataset.type!=t)return;tb.classList.add("fixed");tb.style.width=sum+"px";
+    tb.querySelectorAll("thead th[data-col]").forEach(x=>{const w=cw[x.dataset.col];if(w){x.style.width=x.style.minWidth=x.style.maxWidth=w+"px"}})})}
+let colDrag=null;
+document.addEventListener("mousedown",e=>{const h=e.target.closest("table.q th .rz");if(!h)return;e.preventDefault();e.stopPropagation();
+  const th=h.closest("th"),tb=th.closest("table.q"),t=tb.dataset.type,k=th.dataset.col;if(!t||!k)return;
+  if(!COLW[t]||!Object.keys(COLW[t]).length){COLW[t]={};tb.querySelectorAll("thead th[data-col]").forEach(x=>COLW[t][x.dataset.col]=Math.round(x.getBoundingClientRect().width))}
+  colDrag={t,k,x:e.clientX,w:COLW[t][k]||Math.round(th.getBoundingClientRect().width)};h.classList.add("on");applyColw(t)},true);
+document.addEventListener("mousemove",e=>{if(!colDrag)return;COLW[colDrag.t][colDrag.k]=Math.max(36,Math.round(colDrag.w+e.clientX-colDrag.x));applyColw(colDrag.t)});
+document.addEventListener("mouseup",()=>{if(!colDrag)return;saveColw();colDrag=null;window.__rzUp=Date.now();renderOut(true)});
+document.addEventListener("dblclick",e=>{const h=e.target.closest("table.q th .rz");if(!h)return;e.preventDefault();e.stopPropagation();
+  delete COLW[h.closest("table.q").dataset.type];saveColw();renderOut(true)},true);
+let PV=null;
+const pvOn=()=>document.body.classList.contains("pvon");
+function pvTop(){$("#pv").style.setProperty("--pvtop",$(".top").offsetHeight+"px")}
+function pvSet(on){document.body.classList.toggle("pvon",on);$("#pv").hidden=!on;$("#pvtoggle").classList.toggle("on",on);pvTop();
+  try{localStorage.setItem("mps.pv",on?"1":"0")}catch(e){}}
+function pvShow(t,x,held){if(!pvOn()||!x||!x.file)return;const k=t+"|"+(held?1:0)+"|"+x.file;if(PV==k)return;PV=k;
+  const q=`type=${encodeURIComponent(t)}&name=${encodeURIComponent(x.file)}${held?"&held=1":""}`;
+  $("#pvname").textContent=x.file+(x.source_file&&x.source_file!=x.file?"  ·  from "+x.source_file:"");$("#pvname").title=$("#pvname").textContent;
+  $("#pvimg").src="/api/preview?"+q;const a=$("#pvpdf");a.href="/api/pdf?"+q;a.hidden=false}
+$("#pvtoggle").onclick=()=>pvSet(!pvOn());$("#pvclose").onclick=()=>pvSet(false);addEventListener("resize",pvTop);
+try{if(localStorage.getItem("mps.pv")=="1")pvSet(true)}catch(e){}
+let editing=null,ROUTE=[],WRITERS=[],UNITS=[["each","ea"],["kg","PKG"],["litre","/L"],["length","PLEN"],["metre","PM"],["lot","lot"]];
 const unitLabel=v=>{if(v==null||v===""||v=="null")return "";const u=UNITS.find(u=>u[0].toLowerCase()==String(v).toLowerCase());return u?u[1]:String(v)};
 function unitSelect(v){
   const vv=v==null||v=="null"?"":String(v),list=[...UNITS];if(vv&&!list.some(u=>u[0].toLowerCase()==vv.toLowerCase()))list.push([vv,vv]);
@@ -2144,7 +2266,8 @@ function docRows(t,list,held){
   return list.map(x=>{const f=x.fields||{},id=t+"|"+(held?"h|":"r|")+x.name,open=outOpen.has(id);
     const pdf=x.pdf?`<a class="btn" target="_blank" rel="noopener" href="/api/pdf?type=${encodeURIComponent(t)}&name=${encodeURIComponent(x.file)}${held?"&held=1":""}" onclick="event.stopPropagation()">PDF</a>`:"";
     const btn=`<button data-act="${held?"release":"hold"}" data-type="${esc(t)}" data-name="${esc(x.name)}">${held?"Release":"Hold"}</button>`
-      +(held?` <button class="danger" data-act="delete" data-type="${esc(t)}" data-name="${esc(x.name)}" title="Take it out of the pipeline (kept in pipeline/deleted for recovery)">Delete</button>`:"");
+      +(held?` <button class="danger" data-act="delete" data-type="${esc(t)}" data-name="${esc(x.name)}" title="Take it out of the pipeline (kept in pipeline/deleted for recovery)">Delete</button>`:"")
+      +(held&&ROUTE.length?` <select class="route" data-type="${esc(t)}" data-name="${esc(x.name)}" onclick="event.stopPropagation()" title="Wrong kind of document? Send it to the right queue: that queue's reader reads it again"><option value="">Move to…</option>${ROUTE.filter(r=>r.type!=t).map(r=>`<option value="${esc(r.type)}">${esc(r.label)}</option>`).join("")}</select>`:"");
     const fv=k=>k=="_folder"?x.source_folder:k=="_hold"?(HOLD[x.hold_reason]||x.hold_reason):f[k]??f[ALIAS[k]];
     const cell=(k,n,isId,kind)=>kind=="tick"?`<input type="checkbox" class="tick" title="Tick once you have checked this order against the PDF (fills Checked in SharePoint)" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" ${f.checked?"checked":""}>`
       :n?esc(money(fv(k))):typeof fv(k)=="boolean"?(fv(k)?"Yes":""):(fv(k)!=null&&fv(k)!=="")?esc(fv(k)):isId?`<span class="muted" title="no number read; file name shown">${esc((x.file||x.name).replace(/\.(pdf|json)$/i,""))}</span>`:"";
@@ -2176,6 +2299,8 @@ function syncStatus(d,ty){
 function renderOut(force){
   const d=last;if(!d||tab=="overview"||tab=="train")return;
   if(editing&&!force)return;           // keep the inputs; the list refreshes after Save / Cancel
+  if(!force&&document.activeElement&&document.activeElement.matches("select.route"))return;   // a Move to... list is open
+  if(!force&&colDrag)return;                                                                  // a column is being resized
   const types=outKey.split(",");
   const keep={};$("#outq").querySelectorAll(".qscroll[data-qs]").forEach(el=>{if(!outScrollReset.has(el.dataset.qs))keep[el.dataset.qs]=[el.scrollTop,el.scrollLeft]});
   outScrollReset.clear();const pageY=window.scrollY;
@@ -2183,25 +2308,30 @@ function renderOut(force){
     const ty=d.types.find(x=>x.type==t),q=outData[t];if(!ty)return "";
     const cols=COLS[DT[t]]||COLS.supplier_invoice,n=q?q.ready_total:ty.awaiting_sync;
     const can=d.sync_all_on&&ty.sync_on&&!ty.sync_running&&!ty.sync_requested&&n>0;
+    const cw=COLW[t]||{},W=k=>cw[k]?` style="width:${cw[k]}px;min-width:${cw[k]}px;max-width:${cw[k]}px"`:"",
+      RZ=k=>`<span class="rz" title="Drag to change the width; double-click for automatic widths"></span>`,
+      tfix=Object.keys(cw).length?` fixed" style="width:${Object.values(cw).reduce((a,b)=>a+b,0)}px`:"";
     const head=lk=>{const so=outSort[t+"|"+lk],th=(l,k,num)=>{const on=so&&so.k==k;
-        return `<th class="${num?"num":""} sortable${on?" sorted":""}" data-sort="${esc(k)}" data-list="${lk}" data-type="${esc(t)}" title="Sort by ${esc(l)}${on?" (click again to reverse)":""}">${l}${on?(so.d=="desc"?" ▼":" ▲"):""}</th>`};
-      return `<tr>${cols.map(([l,k,num])=>th(l,k,num)).join("")}${th("Lines","_lines",1)}<th>Checks</th><th></th></tr>`};
+        return `<th class="${num?"num":""} sortable${on?" sorted":""}" data-col="${esc(k)}" data-sort="${esc(k)}" data-list="${lk}" data-type="${esc(t)}"${W(k)} title="Sort by ${esc(l)}${on?" (click again to reverse)":""}">${l}${on?(so.d=="desc"?" ▼":" ▲"):""}${RZ(k)}</th>`};
+      return `<tr>${cols.map(([l,k,num])=>th(l,k,num)).join("")}${th("Lines","_lines",1)}<th data-col="_checks"${W("_checks")}>Checks${RZ("_checks")}</th><th data-col="_act"${W("_act")}>${RZ("_act")}</th></tr>`};
     return `<section class="card"><div class="qhead"><h2>Out queue: ${esc(ty.label)} (${n} ready${q&&q.held_total?`, ${q.held_total} on hold`:""})</h2>
       ${q&&q.ready.length?`<button data-act="expand" data-type="${esc(t)}">${q.ready.every(x=>outOpen.has(t+"|r|"+x.name))?"Collapse all":"Expand all"}</button>`:""}
+      ${Object.keys(cw).length?`<button data-act="resetw" data-type="${esc(t)}" title="Automatic column widths again">Reset widths</button>`:""}
       ${ty.sync_requested&&!ty.sync_running?`<button data-act="cancel_sync" data-type="${esc(t)}">Cancel request</button>`:""}
       <button class="primary" data-act="sync_now" data-type="${esc(t)}" ${can?"":"disabled"}>Sync ${n} to SharePoint &amp; SQL</button></div>
       ${syncStatus(d,ty)}
-      ${!q?`<div class="small muted">Loading…</div>`:q.ready.length?`<div class="scroll qscroll" data-qs="${esc(t)}|r"><table class="q"><thead>${head("r")}</thead><tbody>${docRows(t,q.ready,false)}</tbody></table></div>
+      ${!q?`<div class="small muted">Loading…</div>`:q.ready.length?`<div class="scroll qscroll" data-qs="${esc(t)}|r"><table class="q${tfix}" data-type="${esc(t)}"><thead>${head("r")}</thead><tbody>${docRows(t,q.ready,false)}</tbody></table></div>
         ${q.ready_total>q.ready.length?`<div class="small muted">Showing the ${outSort[t+"|r"]?"first":"oldest"} ${q.ready.length} of ${q.ready_total}${outSort[t+"|r"]?" (sorted over all of them)":""}.</div>`:""}`
         :`<div class="small muted">Nothing waiting to sync.</div>`}
       ${q&&q.held.length?`<details ${outOpen.has("held|"+t)?"open":""} data-held="${esc(t)}"><summary>On hold (${q.held_total}): skipped by Sync now until released${q.held_total>q.held.length?` · showing the ${outSort[t+"|h"]?"first":"oldest"} ${q.held.length}`:""}</summary>
-        <div class="scroll qscroll" data-qs="${esc(t)}|h"><table class="q"><thead>${head("h")}</thead><tbody>${docRows(t,q.held,true)}</tbody></table></div></details>`:""}
-      <div class="small muted" style="margin-top:8px">Click a row to see what goes to SharePoint and SQL, with its line items. Hold keeps a document back from the next sync.</div></section>`}).join("");
+        <div class="scroll qscroll" data-qs="${esc(t)}|h"><table class="q${tfix}" data-type="${esc(t)}"><thead>${head("h")}</thead><tbody>${docRows(t,q.held,true)}</tbody></table></div></details>`:""}
+      <div class="small muted" style="margin-top:8px">Click a row to see what goes to SharePoint and SQL, with its line items. Hold keeps a document back from the next sync. On hold, Move to… sends a document to the right queue, where it is read again.</div></section>`}).join("");
   $("#outq").querySelectorAll(".qscroll[data-qs]").forEach(el=>{const k=keep[el.dataset.qs];if(k){el.scrollTop=k[0];el.scrollLeft=k[1]}});
   if(window.scrollY!=pageY)window.scrollTo(window.scrollX,pageY);
 }
 $("#outq").addEventListener("click",e=>{
   const h=e.target.closest("th[data-sort]");if(!h)return;
+  if(e.target.closest(".rz")||Date.now()-(window.__rzUp||0)<400){e.stopPropagation();return}   // a resize, not a sort
   e.stopPropagation();if(editing){toast("Save or cancel the edit first");return}
   const key=h.dataset.type+"|"+h.dataset.list,cur=outSort[key];
   outScrollReset.add(key);outSort[key]=cur&&cur.k==h.dataset.sort?{k:cur.k,d:cur.d=="asc"?"desc":"asc"}:{k:h.dataset.sort,d:"asc"};
@@ -2237,12 +2367,20 @@ $("#outq").addEventListener("click",async e=>{
     if(!confirm("Delete "+b.dataset.name+" from the pipeline? It won't be synced. (Kept in pipeline/deleted, so it can be recovered.)"))return;
     b.disabled=true;await act({action:"delete",type:b.dataset.type,name:b.dataset.name},"Deleted");loadOut();return}
   if(b){e.stopPropagation();const a=b.dataset.act,t=b.dataset.type;
+    if(a=="resetw"){delete COLW[t];saveColw();renderOut(true);return}
     if(a=="expand"){const q=outData[t];if(!q)return;const ids=q.ready.map(x=>t+"|r|"+x.name),all=ids.every(i=>outOpen.has(i));
       ids.forEach(i=>all?outOpen.delete(i):outOpen.add(i));renderOut();return}
     if(a=="sync_now"&&!confirm("Upload everything in the "+t+" out queue to SharePoint and SQL?"))return;
     b.disabled=true;await act({action:a,type:t,name:b.dataset.name},{sync_now:"Sync requested",cancel_sync:"Request cancelled",hold:"On hold",release:"Released"}[a]);loadOut();return}
-  const r=e.target.closest("tr.doc");if(r){const id=r.dataset.open;outOpen.has(id)?outOpen.delete(id):outOpen.add(id);renderOut()}});
+  const r=e.target.closest("tr.doc");if(r){const id=r.dataset.open;
+    {const [pt,hr,...rest]=id.split("|"),nm=rest.join("|"),ph=hr=="h",pq=outData[pt];pvShow(pt,pq&&(ph?pq.held:pq.ready).find(d=>d.name==nm),ph)}
+    outOpen.has(id)?outOpen.delete(id):outOpen.add(id);renderOut()}});
 $("#outq").addEventListener("change",async e=>{
+  const rs=e.target.closest("select.route");
+  if(rs){const to=rs.value;if(!to)return;const lbl=rs.options[rs.selectedIndex].text;
+    if(!confirm("Move "+rs.dataset.name+" to "+lbl+"? It is read again there; the held copy goes to pipeline/deleted.")){rs.value="";rs.blur();return}
+    rs.disabled=true;await act({action:"reroute",type:rs.dataset.type,name:rs.dataset.name,dest:to},"Moved to "+lbl+": it will be read again there");
+    rs.blur();loadOut();return}
   const us=e.target.closest("select[data-c=price_unit]");
   if(us&&us.value=="__add__"){
     const name=(prompt("New unit (as written on the forms, e.g. PBAG):")||"").trim();if(!name){us.value="";return}
