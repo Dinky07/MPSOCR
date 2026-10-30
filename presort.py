@@ -35,7 +35,7 @@ try:
 except Exception:                         # pragma: no cover
     ws_reader = None
 
-VERSION = "presort-4b (29 Oct: Ronin orders)"
+VERSION = "presort-5 (30 Oct: pro forma = quotation, own-form rule from the labels)"
 KINDS = {
     "purchase_order": "PurchaseOrders", "polymer_order": "PurchaseOrders", "pro_forma": "PurchaseOrders",
     "quotation": "PurchaseOrders", "statement": "PurchaseOrders", "credit_note": "PurchaseOrders",
@@ -87,7 +87,7 @@ def _title(text, n=14):
 
 def prior(name, folder):
     s = f"{folder or ''} {name or ''}".upper()
-    for pat, kind in ((r"PROOF OF PAYMENT", "proof_of_payment"), (r"PRO ?FORMA", "pro_forma"), (r"\bQUOT|\bQUO\d", "quotation"),
+    for pat, kind in ((r"PROOF OF PAYMENT", "proof_of_payment"), (r"PRO ?FORMA", "quotation"), (r"\bQUOT|\bQUO\d", "quotation"),
                       (r"\bJT ?\d", "job_transfer"), (r"\bINV(OICE)?\b|\bINV\d|\bSINV\d", "supplier_invoice"),
                       (r"CANCEL", "purchase_order"), (r"\bSTATEMENT\b", "statement")):
         if re.search(pat, s):
@@ -111,10 +111,15 @@ def verdict(pdf, name=None, folder=None, texts=None):
     vat = [v for v in dict.fromkeys(VATNO.findall(B)) if v not in OWN_VAT]
     inv_no = has(r"\bINV(OICE)?\.? ?(NO|NUMBER|NR|#)\b|\bDOCUMENT NO\b")
     heat = has(r"\b(HEAT|CAST|MELT) ?(NO|NUMBER|NR)\b|\bEN ?10204\b|\b3\.1 ?B?\b.*\bCERTIFICATE\b")
-    mps_form = has(r"\bMINING PRESSURE SYSTEMS\b|\bKUSASA\b", T) and has(r"\bPURCHASE ORDER\b|\bORDER NO\b|\bINTER ?GROUP\b|\bIGT\b", T)
+    # presort-5 (labels 30 Oct): letters, goods returned notes and supplier pro formas also carry the MPS name and an
+    # order number; the printed "ORDER A" / IGT heading is often below the title area
+    own_head = has(r"\bMINING PRESSURE SYS|\bKUSASA\b|DEEP DOWN,? WE CARE", T)
+    own_other = has(r"\bGOODS RETURNED\b|\bCONTRACT\b|\bCERTIFICATE\b|\bTAX INVOICE\b|\bPRO ?-?FORMA\b|\bQUOTATION\b|\bDELIVERY NOTE\b|\bSTATEMENT\b|\bCREDIT NOTE\b|\bYOUR VAT\b", T)
+    mps_form = own_head and not own_other and (has(r"\bPURCHASE ORDER\b|\bORDER NO\b|\bINTER ?GROUP\b|\bIGT\b", T)
+                                               or has(r"\bORDER\s*:?\s*A\s*[0-9/]|\bINTERNAL\s*GROUP\s*TRANSFER\b|\bI\s*\.?\s*G\s*\.?\s*T\s*\.?\s*NO\b"))
 
     if has(r"\bPRO ?-?FORMA\b", T):
-        votes.append(("pro_forma", "likely", "title: pro forma"))
+        votes.append(("quotation", "likely", "title: pro forma"))         # presort-5: one kind with quotations
     elif has(r"\bTAX INVOICE\b", T) and (vat or inv_no):
         votes.append(("supplier_invoice", "sure" if (vat and inv_no) else "likely", "title: tax invoice" + (" + supplier VAT" if vat else "") + (" + invoice no" if inv_no else "")))
     elif has(r"\bTAX INVOICE\b", T):

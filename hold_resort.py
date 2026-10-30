@@ -28,7 +28,7 @@ import sidecar_lock                                     # noqa: E402
 ROOT = Path("/srv/ocr/scans/pipeline")
 TS = ROOT / "work" / "sorter" / "testset"
 ORDER_FORMS = {"mps_order", "polymer_order", "internal_group_transfer"}
-LABEL = {"sales_quotation": "quotation", "internal_group_transfer": "purchase_order", "mps_invoice": "supplier_invoice",
+LABEL = {"sales_quotation": "quotation", "pro_forma": "quotation", "internal_group_transfer": "purchase_order", "mps_invoice": "supplier_invoice",
          "release_note": "other"}
 
 
@@ -66,7 +66,20 @@ def eval_testset(a):
             p = mv.parent / m["pdf"]
             if p.exists():
                 jobs.append(({"ID": "MOVE-" + m["id"] + "-p1", ti: m["type"], "Original file": m.get("original_file"), "Queue": m.get("from")}, p))
-    print(f"test set {n_ts} pages + {len(jobs) - n_ts} moved on the dashboard", flush=True)
+    n_mv = len(jobs) - n_ts
+    # Dino's labelled hold documents (work/sorter/labels/labels.xlsx, 30 Oct) are labelled pages too
+    lx = ROOT / "work" / "sorter" / "labels" / "labels.xlsx"
+    if lx.exists():
+        lit = openpyxl.load_workbook(lx, read_only=True, data_only=True)["Documents"].iter_rows(values_only=True)
+        lh = [str(x or "") for x in next(lit)]
+        for lr in lit:
+            d = dict(zip(lh, lr))
+            p = lx.parent / "pdf" / f"{d.get('ID')}.pdf"
+            if d.get("ID") and d.get("TYPE") and p.exists():
+                jobs.append(({"ID": f"LBL-{d['ID']}-p1", ti: d["TYPE"], "Original file": d.get("Original file"),
+                              "Queue": d.get("Original folder")}, p))
+    n_lb = len(jobs) - n_ts - n_mv
+    print(f"test set {n_ts} pages + {n_mv} moved on the dashboard + {n_lb} labelled hold documents", flush=True)
 
     def one(j):
         r, pdf = j
@@ -87,7 +100,7 @@ def eval_testset(a):
                 stats[k][0] += 1
             elif v["kind"] != "unsure":
                 wrong.append({"id": r["ID"], "verdict": k, "truth": truth, "signals": v.get("signals")})
-    out = {"pages": len(jobs), "from_moves": len(jobs) - n_ts, "by_verdict": {k: {"right": s[0], "of": s[1], "precision": round(s[0] / s[1], 3)}
+    out = {"pages": len(jobs), "from_moves": n_mv, "from_labels": n_lb, "by_verdict": {k: {"right": s[0], "of": s[1], "precision": round(s[0] / s[1], 3)}
                                              for k, s in sorted(stats.items())}, "wrong": wrong}
     p = ROOT / "reports" / f"presort eval {datetime.now():%Y-%m-%d %H%M}.json"
     json.dump(out, open(p, "w"), indent=1)
