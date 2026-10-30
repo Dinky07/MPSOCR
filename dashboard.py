@@ -1399,6 +1399,32 @@ def route_targets(cfg):
     return out
 
 
+MOVE_LABEL = {"PurchaseOrders": "purchase_order", "PolymerOrders": "polymer_order", "RoninOrders": "ronin_order",
+              "ProofOfPayments": "proof_of_payment", "SupplierInvoices": "supplier_invoice", "SupplierInvoicesArchive": "supplier_invoice",
+              "DeliveryNotes": "delivery_note", "JobTransfers": "job_transfer", "RoninJobTransfers": "job_transfer",
+              "WorkshopSheets": "workshop_sheet", "TestCerts": "test_cert", "ReleaseNotes": "release_note", "OtherDocuments": "other"}
+
+
+def record_move(root, t, dest, side, pdf, on_hold, category=None):
+    """Every Move to... is a label for the pre-sort (341): a copy of the PDF and a line in work/sorter/moves/moves.jsonl;
+    hold_resort.py eval scores the pre-sort on them with Dino's test set. Never stops the move."""
+    try:
+        d = root / "work" / "sorter" / "moves"
+        (d / "pdf").mkdir(parents=True, exist_ok=True)
+        h = hashlib.sha256(pdf.read_bytes()).hexdigest()
+        mid = h[:16]
+        if not (d / "pdf" / f"{mid}.pdf").exists():
+            shutil.copy2(pdf, d / "pdf" / f"{mid}.pdf")
+        rec = {"id": mid, "pdf": f"pdf/{mid}.pdf", "type": MOVE_LABEL.get(dest, "other"), "to": dest, "from": t, "held": bool(on_hold),
+               "category": category, "read_as": side.get("doc_type"), "flags": (side.get("flags") or [])[:8],
+               "original_file": side.get("source_file"), "source_folder": side.get("source_folder"), "source_page": side.get("source_page"),
+               "content_hash": h.upper(), "at": datetime.now().isoformat(timespec="seconds"), "by": "dashboard"}
+        with open(d / "moves.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+    except Exception as e:
+        sys.stderr.write(f"move not recorded for training: {e}\n")
+
+
 _ODCATS = {"at": 0.0, "cats": []}
 
 
@@ -1455,6 +1481,7 @@ def move_to_od(cfg, root, t, name, js, side, pdf, on_hold, body):
     tmp = dest / (Path(new).stem + ".json.tmp")
     tmp.write_text(json.dumps(sc, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     os.replace(tmp, dest / (Path(new).stem + ".json"))
+    record_move(root, t, "OtherDocuments", side, pdf, on_hold, cat)  # 341: a label for the pre-sort
     gone = root / "deleted" / t / datetime.now().strftime("%Y-%m")
     gone.mkdir(parents=True, exist_ok=True)
     for q in (pdf, Path(str(js) + ".attempts"), js):
@@ -1502,6 +1529,7 @@ def reroute_doc(cfg, root, t, body):
     (meta_dir / (name_in + ".json")).write_text(json.dumps(meta, indent=1), encoding="utf-8")   # the note before the PDF
     shutil.copy2(pdf, indir / (name_in + ".part"))                                             # the worker skips .part
     os.replace(indir / (name_in + ".part"), indir / name_in)
+    record_move(root, t, dest, side, pdf, on_hold)                  # 341: a label for the pre-sort
     gone = root / "deleted" / t / datetime.now().strftime("%Y-%m")
     gone.mkdir(parents=True, exist_ok=True)
     for q in (pdf, Path(str(js) + ".attempts"), js):

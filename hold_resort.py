@@ -52,6 +52,21 @@ def eval_testset(a):
         pdf = TS / "pdf" / f"{m.group(1)}.pdf"
         if pdf.exists():
             jobs.append((r, pdf))
+    # 341: the documents Dino moved on the dashboard (Move to...) are labelled pages too; the latest record counts
+    n_ts, mv = len(jobs), ROOT / "work" / "sorter" / "moves" / "moves.jsonl"
+    if mv.exists():
+        last = {}
+        for line in open(mv, encoding="utf-8"):
+            try:
+                m = json.loads(line)
+                last[m["id"]] = m
+            except (ValueError, KeyError):
+                continue
+        for m in last.values():
+            p = mv.parent / m["pdf"]
+            if p.exists():
+                jobs.append(({"ID": "MOVE-" + m["id"] + "-p1", ti: m["type"], "Original file": m.get("original_file"), "Queue": m.get("from")}, p))
+    print(f"test set {n_ts} pages + {len(jobs) - n_ts} moved on the dashboard", flush=True)
 
     def one(j):
         r, pdf = j
@@ -72,7 +87,7 @@ def eval_testset(a):
                 stats[k][0] += 1
             elif v["kind"] != "unsure":
                 wrong.append({"id": r["ID"], "verdict": k, "truth": truth, "signals": v.get("signals")})
-    out = {"pages": len(jobs), "by_verdict": {k: {"right": s[0], "of": s[1], "precision": round(s[0] / s[1], 3)}
+    out = {"pages": len(jobs), "from_moves": len(jobs) - n_ts, "by_verdict": {k: {"right": s[0], "of": s[1], "precision": round(s[0] / s[1], 3)}
                                              for k, s in sorted(stats.items())}, "wrong": wrong}
     p = ROOT / "reports" / f"presort eval {datetime.now():%Y-%m-%d %H%M}.json"
     json.dump(out, open(p, "w"), indent=1)
