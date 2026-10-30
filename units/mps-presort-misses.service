@@ -1,0 +1,11 @@
+[Unit]
+OnFailure=mps-alert@%n.service
+Description=MPS weekly pre-sort misses report (Dino 30 Oct): dashboard moves grouped by from/to, worth tuning at 5 misses
+[Service]
+Type=oneshot
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/presort_misses.py --min 5
+TimeoutStartSec=1h
+Nice=10

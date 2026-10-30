@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS weekly pre-sort misses report (Mondays 06:00, after the weekend training)
+[Timer]
+OnCalendar=Mon *-*-* 06:00:00
+Persistent=true
+Unit=mps-presort-misses.service
+[Install]
+WantedBy=timers.target
