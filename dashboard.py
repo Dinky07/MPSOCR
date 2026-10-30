@@ -1396,15 +1396,16 @@ def route_targets(cfg):
 
 
 def reroute_doc(cfg, root, t, body):
-    """A held document read as the wrong kind: the PDF goes to in/<dest>/ (with a _meta note) to be read again by that
+    """A document (ready or on hold) read as the wrong kind: the PDF goes to in/<dest>/ (with a _meta note) to be read again by that
     queue's reader; the held copy moves to deleted/<t>/<yyyy-mm>/ with a .rerouted.json note."""
     dest = str(body.get("dest") or "")
     if dest == t or dest not in {r["type"] for r in route_targets(cfg)}:
         raise ValueError("can't move it to that queue")
-    held = root / "out" / t / "hold"
+    on_hold = bool(body.get("held"))                     # 339: the ready queue too
+    held = root / "out" / t / ("hold" if on_hold else "")
     name = str(body.get("name") or "")
     if not name.endswith(".json") or not (held / name).is_file():
-        raise ValueError("only documents on hold can be moved (Hold it first)")
+        raise ValueError("document not found (synced or moved already?)")
     js = safe_child(held, name)
     if Path(str(js) + ".uploaded").exists():
         raise ValueError("already uploaded to SharePoint")
@@ -1422,7 +1423,7 @@ def reroute_doc(cfg, root, t, body):
     while (indir / name_in).exists() or (meta_dir / (name_in + ".json")).exists():
         name_in, k = f"{base}_{k}.pdf", k + 1
     stamp = datetime.now().isoformat(timespec="seconds")
-    meta = {"original_name": src, "rerouted_from": f"out/{t}/hold/{name} (dashboard)", "routed_at": stamp, "routed_by": "dashboard"}
+    meta = {"original_name": src, "rerouted_from": f"out/{t}/{'hold/' if on_hold else ''}{name} (dashboard)", "routed_at": stamp, "routed_by": "dashboard"}
     for key in ("source_folder", "source_modified"):
         if side.get(key):
             meta[key] = side[key]
@@ -1445,7 +1446,7 @@ def do_action(cfg, body):
     a, t, name = body.get("action"), body.get("type"), str(body.get("name") or "")
     if a in ("edit", "check", "delete", "hold", "release", "reroute") and name and t in cfg.get("doc_types", {}):
         d = Path(cfg["root"]) / "out" / t
-        js = (d / "hold" / name) if (a in ("delete", "release", "reroute") or (a not in ("hold",) and body.get("held"))) else (d / name)
+        js = (d / "hold" / name) if (a in ("delete", "release") or (a not in ("hold",) and body.get("held"))) else (d / name)
         try:
             with sidecar_lock.locked(js, "dashboard", wait=15):
                 return _do_action(cfg, body)
@@ -2313,7 +2314,7 @@ function docRows(t,list,held){
     const pdf=x.pdf?`<a class="btn" target="_blank" rel="noopener" href="/api/preview?type=${encodeURIComponent(t)}&name=${encodeURIComponent(x.file)}${held?"&held=1":""}" onclick="event.stopPropagation()" title="First page as an image, in a new tab (the whole PDF: Whole PDF in the preview pane)">Image</a>`:"";
     const btn=`<button data-act="${held?"release":"hold"}" data-type="${esc(t)}" data-name="${esc(x.name)}">${held?"Release":"Hold"}</button>`
       +(held?` <button class="danger" data-act="delete" data-type="${esc(t)}" data-name="${esc(x.name)}" title="Take it out of the pipeline (kept in pipeline/deleted for recovery)">Delete</button>`:"")
-      +(held&&ROUTE.length?` <select class="route" data-type="${esc(t)}" data-name="${esc(x.name)}" onclick="event.stopPropagation()" title="Wrong kind of document? Send it to the right queue: that queue's reader reads it again"><option value="">Move to…</option>${ROUTE.filter(r=>r.type!=t).map(r=>`<option value="${esc(r.type)}">${esc(r.label)}</option>`).join("")}</select>`:"");
+      +(ROUTE.length?` <select class="route" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" onclick="event.stopPropagation()" title="Wrong kind of document? Send it to the right queue: that queue's reader reads it again"><option value="">Move to…</option>${ROUTE.filter(r=>r.type!=t).map(r=>`<option value="${esc(r.type)}">${esc(r.label)}</option>`).join("")}</select>`:"");
     const fv=k=>k=="_folder"?x.source_folder:k=="_hold"?(HOLD[x.hold_reason]||x.hold_reason):f[k]??f[ALIAS[k]];
     const cell=(k,n,isId,kind)=>kind=="tick"?`<input type="checkbox" class="tick" title="Tick once you have checked this order against the PDF (fills Checked in SharePoint)" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" ${f.checked?"checked":""}>`
       :n?esc(money(fv(k))):typeof fv(k)=="boolean"?(fv(k)?"Yes":""):(fv(k)!=null&&fv(k)!=="")?esc(fv(k)):isId?`<span class="muted" title="no number read; file name shown">${esc((x.file||x.name).replace(/\.(pdf|json)$/i,""))}</span>`:"";
@@ -2377,7 +2378,7 @@ function renderOut(force){
         :`<div class="small muted">Nothing waiting to sync.</div>`}
       ${q&&q.held.length?`<details ${outOpen.has("held|"+t)?"open":""} data-held="${esc(t)}"><summary>On hold (${q.held_total}): skipped by Sync now until released${q.held_total>q.held.length?` · showing the ${outSort[t+"|h"]?"first":"oldest"} ${q.held.length}`:""}</summary>
         <div class="scroll qscroll" data-qs="${esc(t)}|h"><table class="q${tfix}" data-type="${esc(t)}"><thead>${head("h")}</thead><tbody>${docRows(t,q.held,true)}</tbody></table></div></details>`:""}
-      <div class="small muted" style="margin-top:8px">Click a row to see what goes to SharePoint and SQL, with its line items. Hold keeps a document back from the next sync. On hold, Move to… sends a document to the right queue, where it is read again.</div></section>`}).join("");
+      <div class="small muted" style="margin-top:8px">Click a row to see what goes to SharePoint and SQL, with its line items. Hold keeps a document back from the next sync. Move to… sends a document to the right queue, where it is read again.</div></section>`}).join("");
   $("#outq").querySelectorAll(".qscroll[data-qs]").forEach(el=>{const k=keep[el.dataset.qs];if(k){el.scrollTop=k[0];el.scrollLeft=k[1]}});
   if(window.scrollY!=pageY)window.scrollTo(window.scrollX,pageY);
 }
@@ -2434,8 +2435,8 @@ $("#outq").addEventListener("change",async e=>{
     if(cf.value)outOpen.add("held|"+t);cf.blur();loadOut();return}
   const rs=e.target.closest("select.route");
   if(rs){const to=rs.value;if(!to)return;const lbl=rs.options[rs.selectedIndex].text;
-    if(!confirm("Move "+rs.dataset.name+" to "+lbl+"? It is read again there; the held copy goes to pipeline/deleted.")){rs.value="";rs.blur();return}
-    rs.disabled=true;await act({action:"reroute",type:rs.dataset.type,name:rs.dataset.name,dest:to},"Moved to "+lbl+": it will be read again there");
+    if(!confirm("Move "+rs.dataset.name+" to "+lbl+"? It is read again there; this copy goes to pipeline/deleted.")){rs.value="";rs.blur();return}
+    rs.disabled=true;await act({action:"reroute",type:rs.dataset.type,name:rs.dataset.name,held:rs.dataset.held=="1",dest:to},"Moved to "+lbl+": it will be read again there");
     rs.blur();loadOut();return}
   const us=e.target.closest("select[data-c=price_unit]");
   if(us&&us.value=="__add__"){
