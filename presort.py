@@ -35,7 +35,7 @@ try:
 except Exception:                         # pragma: no cover
     ws_reader = None
 
-VERSION = "presort-5 (30 Oct: pro forma = quotation, own-form rule from the labels)"
+VERSION = "presort-5b (31 Oct: own letterhead at the top; no delivery note on certificates)"
 KINDS = {
     "purchase_order": "PurchaseOrders", "polymer_order": "PurchaseOrders", "pro_forma": "PurchaseOrders",
     "quotation": "PurchaseOrders", "statement": "PurchaseOrders", "credit_note": "PurchaseOrders",
@@ -113,7 +113,8 @@ def verdict(pdf, name=None, folder=None, texts=None):
     heat = has(r"\b(HEAT|CAST|MELT) ?(NO|NUMBER|NR)\b|\bEN ?10204\b|\b3\.1 ?B?\b.*\bCERTIFICATE\b")
     # presort-5 (labels 30 Oct): letters, goods returned notes and supplier pro formas also carry the MPS name and an
     # order number; the printed "ORDER A" / IGT heading is often below the title area
-    own_head = has(r"\bMINING PRESSURE SYS|\bKUSASA\b|DEEP DOWN,? WE CARE", T)
+    # presort-5b: our letterhead heads our own forms; a customer's order names us lower down (as its supplier)
+    own_head = has(r"\bMINING PRESSURE SYS|\bKUSASA\b", _title(text, 5)) or has(r"DEEP DOWN,? WE CARE", T)
     own_other = has(r"\bGOODS RETURNED\b|\bCONTRACT\b|\bCERTIFICATE\b|\bTAX INVOICE\b|\bPRO ?-?FORMA\b|\bQUOTATION\b|\bDELIVERY NOTE\b|\bSTATEMENT\b|\bCREDIT NOTE\b|\bYOUR VAT\b", T)
     mps_form = own_head and not own_other and (has(r"\bPURCHASE ORDER\b|\bORDER NO\b|\bINTER ?GROUP\b|\bIGT\b", T)
                                                or has(r"\bORDER\s*:?\s*A\s*[0-9/]|\bINTERNAL\s*GROUP\s*TRANSFER\b|\bI\s*\.?\s*G\s*\.?\s*T\s*\.?\s*NO\b"))
@@ -134,7 +135,8 @@ def verdict(pdf, name=None, folder=None, texts=None):
         votes.append(("job_transfer", "sure" if has(r"\bJT ?\d{4,6}\b|\bTRANSFER(RED)? (FROM|TO)\b") else "likely", "title: job transfer"))
     if has(r"\b(INSPECTION|MILL TEST|MATERIAL TEST|TEST) CERTIFICATE\b|\bCERTIFICATE OF (CONFORMITY|COMPLIANCE)\b", T) and heat:
         votes.append(("test_cert", "likely", "title: certificate + heat / EN 10204"))
-    if has(r"\bDELIVERY NOTE\b|\bWAYBILL\b|\bGOODS RECEIVED\b", T) and not codes and not has(r"\bTAX INVOICE\b", T):
+    if has(r"\bDELIVERY NOTE\b|\bWAYBILL\b|\bGOODS RECEIVED\b", T) and not codes and not has(r"\bTAX INVOICE\b", T) \
+            and not has(r"\bCERTIFICAT", T):                # presort-5b: certificates quote the delivery note number
         if has(r"\bMINING PRESSURE SYSTEMS\b", T) and has(r"\bIN ?\d{5,7}\b"):
             votes.append(("delivery_note", "likely", "title: MPS delivery note, IN number, no barcode read"))
         else:
