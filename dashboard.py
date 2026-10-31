@@ -41,6 +41,10 @@ try:
     import rn_reader                # release notes (28 Oct): line text and totals after an edit
 except Exception:                   # pragma: no cover
     rn_reader = None
+try:
+    import co_reader                # customer orders (30 Oct): line sum / checks after an edit
+except Exception:                   # pragma: no cover
+    co_reader = None
 
 CONFIG_PATH = Path(os.environ.get("MPS_OCR_CONFIG", "/srv/ocr/pipeline/config.json"))
 SESSIONS = {}                 # token -> {"exp": ts, "csrf": str}
@@ -938,6 +942,8 @@ EDITABLE = {
     "release_note": ("release_number", "customer", "project_description", "project_number", "job_number", "qcp_number",
                      "inspection_date", "signed_off", "inspector", "inspector_company", "signed_date", "mps_name",
                      "released_qty", "despatch_to", "ncr_no", "inspections_text"),
+    "customer_order": ("job_number", "order_number", "order_date", "customer_account", "vat_number", "total_excl", "total_vat",
+                       "total_incl", "project_lead_written", "lines_from_workings"),
     "test_cert": ("cert_no", "cert_type", "date", "mill", "supplier", "customer", "purchaser", "mps_po", "ronin_po", "contract",
                   "family", "standard", "grade", "material_no"),
 }
@@ -947,13 +953,15 @@ EDIT_LINES = {"po": ("quantity", "description", "unit_price", "price_unit"),
               "delivery_note": ("quantity", "description"),
               "ws": ("item_no", "mark", "qty", "size", "dwg_no", "dims_text"),
               "release_note": ("qty", "item_ref", "mark_no", "description"),
+              "customer_order": ("customer_code", "description", "quantity", "unit", "unit_price", "discount_pct", "line_total"),
               "test_cert": ("family", "product", "description", "size_text", "size_nb", "schedule", "class", "grade", "ends",
                             "length_m", "qty", "unit", "heat_no")}
-NUMERIC = {"amount", "subtotal", "vat", "total", "unit_price", "qty", "sheet_no", "sheet_of", "size_nb", "length_m", "released_qty"}
+NUMERIC = {"amount", "subtotal", "vat", "total", "unit_price", "qty", "sheet_no", "sheet_of", "size_nb", "length_m", "released_qty",
+           "quantity", "discount_pct", "line_total", "total_excl", "total_vat", "total_incl"}
 
 
 def _edit_value(k, v, doc_type):
-    if k in ("cancelled", "amended", "stamped", "ifc_signed", "signed_off", "kusasa", "accepted", "cod"):
+    if k in ("cancelled", "amended", "stamped", "ifc_signed", "signed_off", "kusasa", "accepted", "cod", "lines_from_workings"):
         return str(v).strip().lower() in ("yes", "true", "1", "on")
     v = "" if v is None else str(v).strip()
     if v == "":
@@ -1009,6 +1017,10 @@ def _recompute(doc_type, f):
         f["items"] = items
         if rn_reader:
             rn_reader.recompute(f)
+    elif doc_type == "customer_order":
+        f["items"] = items
+        if co_reader:
+            co_reader.recompute(f)
     elif doc_type == "test_cert":
         f["items"] = items
         if tc_reader and hasattr(tc_reader, "recompute"):
@@ -2126,7 +2138,7 @@ function recentHtml(list){
     <div class="name">${esc(r.source)}</div><div class="small muted">${esc(r.type)} · ${esc((r.at||"").replace("T"," ").slice(0,19))}${Array.isArray(r.outputs)&&r.outputs.length?" → "+esc(r.outputs.join(", ")):""}${r.outputs&&r.outputs.error?` <span class="err">${esc(r.outputs.error)}</span>`:""}</div></div></div>`).join("")||`<div class="muted small">No activity yet.</div>`;
 }
 // ---- tabs: Overview + one per document type (the invoice archive sits with Supplier Invoices)
-const TAB_DEFS=[{id:"jt",label:"Job Transfers",types:["JobTransfers"]},{id:"rjt",label:"Ronin Job Transfers",types:["RoninJobTransfers"]},{id:"po",label:"Purchase Orders",types:["PurchaseOrders"]},
+const TAB_DEFS=[{id:"jt",label:"Job Transfers",types:["JobTransfers"]},{id:"rjt",label:"Ronin Job Transfers",types:["RoninJobTransfers"]},{id:"co",label:"Customer Orders",types:["CustomerOrders"]},{id:"po",label:"Purchase Orders",types:["PurchaseOrders"]},
   {id:"pl",label:"Polymer Orders",types:["PolymerOrders"]},{id:"ro",label:"Ronin Purchase Orders",types:["RoninOrders"]},{id:"pop",label:"Proof of Payments",types:["ProofOfPayments"]},
   {id:"si",label:"Supplier Invoices",types:["SupplierInvoices","SupplierInvoicesArchive"],vat:true},
   {id:"dn",label:"Delivery Notes",types:["DeliveryNotes"]},{id:"ws",label:"Workshop Sheets",types:["WorkshopSheets"]},{id:"tc",label:"Test Certificates",types:["TestCerts"]}];
@@ -2196,6 +2208,7 @@ const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_n
   rn:[["Release number","release_number",0,1],["Customer","customer",0,0,"wrap"],["Project","project_description",0,0,"wrap"],
     ["Project number","project_number"],["MPS job","job_number"],["QCP number","qcp_number"],["Inspection date","inspection_date"],
     ["Signed off","signed_off_label"],["Inspector","inspector"],["Supporting pages","supporting_text",0,0,"wrap"],["Held because","_hold",0,0,"wrap"]],
+  co:[["Job","job_number",0,1],["Customer PO","order_number"],["Account","customer_account"],["How","account_how"],["Customer","customer_name",0,0,"wrap"],["VAT","vat_number"],["Date","order_date"],["Excl","total_excl",1],["Lines","line_count",1],["Lines from","lines_from"],["Lead","project_lead_written"],["Held because","_hold",0,0,"wrap"]],
   dn:[["Delivery note","dn_number",0,1],["Date","date"],["Customer","customer",0,0,"wrap"],["Account","customer_account"],
     ["Customer order","customer_order"],["Job","job_number"],["Pages","pages"],["Extra pages","extra_pages",0,0,"wrap"],["Held because","_hold",0,0,"wrap"]],
   ws:[["MPS DWG","mps_dwg_no",0,1],["Job","job_number"],["Sheet","sheet"],["Date","date"],["Project","project",0,0,"wrap"],["Corrosion int","corrosion_int"],
@@ -2203,7 +2216,7 @@ const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_n
   test_cert:[["Cert no","cert_no",0,1],["Family","family"],["Date","date"],["Mill","mill",0,0,"wrap"],["MPS PO","mps_po"],["Ronin PO","ronin_po"],
     ["Type","cert_type"],["Heats","heats_text",0,0,"wrap"],["Checked","checked",0,0,"tick"]]};
 const ALIAS={order_number:"po_number",supplier:"supplier_name"};      // older sidecars (generic reader)
-const DT={SalesQuotes:"sq",OtherDocuments:"od",ReleaseNotes:"rn",SupplierInvoices:"supplier_invoice",SupplierInvoicesArchive:"supplier_invoice",PurchaseOrders:"po",PolymerOrders:"pl",RoninOrders:"po",ProofOfPayments:"pop",JobTransfers:"jt",RoninJobTransfers:"jt",DeliveryNotes:"dn",WorkshopSheets:"ws",TestCerts:"test_cert"};
+const DT={CustomerOrders:"co",SalesQuotes:"sq",OtherDocuments:"od",ReleaseNotes:"rn",SupplierInvoices:"supplier_invoice",SupplierInvoicesArchive:"supplier_invoice",PurchaseOrders:"po",PolymerOrders:"pl",RoninOrders:"po",ProofOfPayments:"pop",JobTransfers:"jt",RoninJobTransfers:"jt",DeliveryNotes:"dn",WorkshopSheets:"ws",TestCerts:"test_cert"};
 const money=v=>v==null||v===""?"":(+v).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2});
 function checks(x){
   const f=x.fields||{},c=[];
@@ -2271,6 +2284,7 @@ const HEAD={
     ["Signed date","signed_date"],["MPS QC","mps_name"],["Sign-off as read","signoff_text",1,1],["Released qty","released_qty"],["Despatch to","despatch_to",1],["Items read from","items_from",1,1],["Inspections read from","inspections_from",1,1],
     ["NCR no","ncr_no"],["Pages","pages",1,1],["Scan pages","source_pages",1,1],["Supporting pages","supporting_text",1,1],
     ["Blank pages left out","blank_pages_dropped",1,1],["Legibility","legibility",1,1]]},
+  customer_order:{title:"Customer order",rows:[["Job","job_number"],["Job from","job_number_from",1,1],["Customer PO","order_number"],["PO read from","order_number_from",1,1],["PO candidates","order_candidates",1,1],["Order date","order_date"],["Account (Sage)","customer_account"],["Account rule","account_how",1,1],["Why","account_note",1,1],["Accounts with this VAT","vat_candidates",1,1],["Customer","customer_name",1,1],["VAT number","vat_number"],["VAT numbers seen","vat_numbers_seen",1,1],["Total excl","total_excl"],["VAT","total_vat"],["Total incl","total_incl"],["Lines sum","lines_sum_excl",1,1],["Lines from","lines_from",1,1],["Lines from the quote workings (big project order)","lines_from_workings",0,0,"yn"],["Written name (top left)","project_lead_written"],["Job File FILE HANDED","project_lead_jobfile",1,1],["Job File order no","jobfile_order_number",1,1],["Scan pages","source_pages",1,1],["Checks","review",1,1]]},
   test_cert:{title:"Test certificate",rows:[["Cert no","cert_no"],["Cert type","cert_type"],["Date","date"],["Date as written","date_as_written",1,1],
     ["Mill","mill"],["Supplier (trader)","supplier"],["Customer","customer"],["Purchaser","purchaser"],["MPS PO","mps_po"],["Ronin PO","ronin_po"],
     ["Contract / invoice","contract"],["Family","family"],["Standard","standard"],["Grade","grade"],["Material no","material_no",1],
@@ -2280,14 +2294,20 @@ const HEAD={
     ["Release number","release_number",1,1]]}};
 const HOLD={not_in_sage:"Not in Sage yet: released automatically after the next Sage read",no_sage_copy:"No Sage copy on the share yet (sage_invoices.csv): released automatically when it arrives",
   not_a_delivery_note:"Not a delivery note (no barcode on the first page)",
-  no_release_note:"Pages scanned before the first release note: not part of one"};
-const MONEYF=new Set(["amount","subtotal","vat","total","unit_price","order_value","total_excl"]),DATEF=new Set(["date","invoice_date","stamp_date","inspection_date","signed_date"]);
+  no_release_note:"Pages scanned before the first release note: not part of one",
+  no_job:"No job number: no sticker barcode and the PO number is not in Job File",several_jobs:"More than one job sticker on the page",
+  job_mismatch:"The PO number belongs to another job in Job File",vat_missing:"No customer VAT number printed: check the account, then release",
+  vat_unknown:"The VAT number is on no Sage account (new customer or cash sale): set the account, then release",
+  job_out_of_range:"Job number far above the newest job: misread sticker?",totals_mismatch:"Lines don't add up to the order total: correct them, then release",
+  account_check:"Account not settled by the VAT number / PO history: check it, then release"};
+const MONEYF=new Set(["amount","subtotal","vat","total","unit_price","order_value","total_excl","total_vat","total_incl","line_total","lines_sum_excl"]),DATEF=new Set(["date","invoice_date","stamp_date","inspection_date","signed_date"]);
 const LINECOLS={po:[["Qty","quantity",1],["Description","description"],["Unit price","unit_price",1],["Unit","price_unit",0,0,"unit"],["Amount","amount",1,1]],
   supplier_invoice:[["Code","item_code"],["Description","description"],["Qty","quantity",1],["Unit price","unit_price",1],["Amount","amount",1]],
   jt:[["#","item_no"],["Qty","quantity"],["Unit","unit"],["Description","description"]],
   delivery_note:[["Qty","quantity",1],["Description","description"]],
   ws:[["Item","item_no"],["Mark","mark"],["Qty","qty",1],["Size","size"],["DWG No (customer)","dwg_no"],["Dimensions (A=227 R=533)","dims_text"]],
   release_note:[["Qty","qty",1],["Item ref","item_ref"],["Mark no","mark_no"],["Description","description"]],
+  customer_order:[["Code","customer_code"],["Description","description"],["Qty","quantity",1],["Unit","unit"],["Unit price","unit_price",1],["Disc %","discount_pct",1],["Line total","line_total",1]],
   test_cert:[["Family","family"],["Product","product"],["Description","description"],["Size as printed","size_text"],["NB","size_nb",1],
     ["Sch / WT","schedule"],["Class","class"],["Grade","grade"],["Ends","ends"],["Length m","length_m",1],["Qty","qty",1],["Unit","unit"],["Heat no","heat_no"]]};
 let COLW={};try{COLW=JSON.parse(localStorage.getItem("mps.colw")||"{}")||{}}catch(e){}

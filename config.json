@@ -35,6 +35,13 @@
     "recursive": false,
     "pattern": "*.pdf",
     "only_newer_than": "2026-10-17"
+   },
+   {
+    "path": "/mnt/nas-scans/ScanToFile/Chronoscan/MPS Orders",
+    "type_folder": "CustomerOrders",
+    "recursive": false,
+    "pattern": "*.pdf",
+    "only_newer_than": "2026-10-09"
    }
   ]
  },
@@ -231,6 +238,21 @@
    "jt_reader": {
     "prompt": "jt_prompt_ronin.txt",
     "number_prefix": "DF"
+   }
+  },
+  "CustomerOrders": {
+   "doc_type": "customer_order",
+   "label": "Customer Orders",
+   "_note": "Customer POs, Dino 30 Oct 2026: NAS Chronoscan\\MPS Orders -> Customer Orders library (MPS Sales) + MPSBusiness docs.CustomerOrder (D260) -> Evolution sales order import sheets. CPU first (OCR, job sticker, VAT -> account, lines), the vision model only for orders whose lines don't add up. Read ~2.5 h after the scan so Job File has the job (order no., value, FILE HANDED) for the cross-checks.",
+   "cpu_first": true,
+   "max_pages": 30,
+   "command": null,
+   "min_age_seconds": 9000,
+   "co_reader": {
+    "gpu_model": "qwen2.5vl:7b",
+    "gpu_px": 1600,
+    "gpu_max_pages": 4,
+    "ocr_jobs": 2
    }
   }
  },

@@ -58,6 +58,10 @@ try:
 except ImportError:                       # pragma: no cover
     rn_reader = None
 try:
+    import co_reader                      # customer orders (30 Oct): job sticker, VAT -> account, lines CPU then GPU
+except ImportError:                       # pragma: no cover
+    co_reader = None
+try:
     import presort                        # pre-sort of the purchase-order queue, SHADOW (27 Oct): verdict recorded only
 except Exception:                         # pragma: no cover
     presort = None
@@ -578,6 +582,9 @@ class Worker:
             self.dn_sage = dn_reader.SageInvoices(self.root / csv_name)
         elif dn_types:
             log.error("delivery_note type configured but dn_reader.py is missing beside worker.py")
+        # customer orders: Sage accounts, sales-order history and Job File orders (CSVs the PC sync writes to the share)
+        self.co_lk = co_reader.Lookups(self.root) if co_reader and any(
+            t.get("doc_type") == "customer_order" for t in self.types.values()) else None
         for folder in self.types:
             for sub in ("in", "out", "done", "failed", "synced", "sync_failed"):
                 (self.root / sub / folder).mkdir(parents=True, exist_ok=True)
@@ -862,7 +869,8 @@ class Worker:
                 if prev is None or prev[0] != sig:
                     self.sizes[p] = (sig, time.time())
                     continue
-                if time.time() - prev[1] >= stable and time.time() - st.st_mtime >= stable:
+                if time.time() - prev[1] >= stable and time.time() - st.st_mtime >= max(
+                        stable, float(self.types[folder].get("min_age_seconds", 0))):    # customer orders wait for Job File
                     ready.setdefault(folder, []).append((st.st_mtime, folder, p))
         if not ready:
             return None
@@ -1343,6 +1351,10 @@ class Worker:
                     # one scanned batch -> one document per delivery note (CPU only), published by process_delivery_notes
                     self.process_delivery_notes(folder, src, work, digest, meta, tcfg, outputs)
                     parts = []
+                elif doc_type == "customer_order":
+                    # one scan -> one document per customer PO (30 Oct); GPU only for orders whose lines don't add up
+                    self.process_customer_orders(folder, src, work, digest, meta, tcfg, outputs, gpu_ok)
+                    parts = []
                 elif doc_type == "release_note":
                     # one scanned batch -> one document per release note + its supporting pages (28 Oct)
                     while self.paused() and not _stop:
@@ -1699,6 +1711,98 @@ class Worker:
                                 (now_iso(), folder, src.name, "dn_cpu", json.dumps(d["flags"])))
                 log.info("%s %s p%s -> %s%s flags=%s", folder, src.name, ",".join(map(str, d["pages"])), pdf_dst.name,
                          f" [held: {d['hold']}]" if held else "", d["flags"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def process_customer_orders(self, folder, src, work, digest, meta, tcfg, outs, gpu_ok):
+        """Customer POs (co_reader): OCR + job sticker + rules on the CPU; orders whose lines don't add up are read
+        with the vision model. In the CPU lane (or without the GPU) such a file gets a note with its OCR text and the
+        upright PDF and goes back to the queue for the GPU worker. One PDF + sidecar per customer PO in out/<folder>/,
+        or out/<folder>/hold/ when a person must look (paper problems, lines, an unsettled account)."""
+        if not (co_reader and self.co_lk):
+            raise RuntimeError("co_reader.py is missing beside worker.py")
+        t0 = time.time()
+        c = dict(co_reader.DEFAULTS, **(tcfg.get("co_reader") or {}))
+        c.setdefault("ollama_url", self.cfg["ollama_url"])
+        c["ollama_url"], c["num_ctx"] = self.cfg["ollama_url"], self.cfg.get("num_ctx", c["num_ctx"])
+        c["keep_alive"] = self.cfg.get("keep_alive", c["keep_alive"])
+        c["ollama_timeout"] = max(int(self.cfg.get("ollama_timeout", 900)), 900)
+        name = meta.get("original_name") or src.name
+        note_p = self.cpu_note(folder, src.name)
+        up_note = note_p.with_name(src.name + ".cpu.up.pdf")
+        note = read_json_file(note_p) or {}
+        tmp = Path(tempfile.mkdtemp(prefix="co-"))
+        try:
+            up = tmp / "upright.pdf"
+            if note.get("co_ocr") and up_note.is_file():
+                shutil.copy2(up_note, up)
+                texts, codes = note["co_ocr"]["texts"], note["co_ocr"]["barcodes"]
+            else:
+                u, texts, codes, otmp = co_reader.ocr(work, c, log)
+                shutil.move(str(u), up)
+                shutil.rmtree(otmp, ignore_errors=True)
+            orders = co_reader.analyse(texts, codes, self.co_lk, c, name=name)
+            if any(o["needs_gpu"] for o in orders):
+                if self.lane == "cpu" or not gpu_ok:
+                    note_p.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(up, up_note)
+                    atomic_write_json(note_p, {"co_ocr": {"texts": texts, "barcodes": codes}, "at": now_iso(),
+                                               "reasons": ["lines do not add up on the CPU"]})
+                    raise GpuUnavailable("customer order lines need the vision model")
+                for o in orders:
+                    if not o["needs_gpu"]:
+                        continue
+                    sub = co_reader.split_pdf(up, o["pages"], tmp / f"g{o['pages'][0]:03d}.pdf", len(texts))
+                    try:
+                        ans = co_reader.gpu_read(sub, [texts[p - 1] for p in o["pages"]], c, log)
+                    except (urllib.error.URLError, ConnectionError) as e:
+                        if not ollama_up(self.cfg):
+                            raise OllamaDown(str(e))
+                        raise
+                    co_reader.apply_gpu(o, ans, self.co_lk, c)
+                    o["gpu_secs"] = ans.get("_secs")
+            for o in orders:
+                stem = co_reader.finish(o, self.co_lk)
+                held = bool(o["hold"])
+                out_dir = self.root / "out" / folder / ("hold" if held else "")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                part = co_reader.split_pdf(up, o["pages"], tmp / f"o{o['pages'][0]:03d}.pdf", len(texts))
+                pdf_dst = unique_path(out_dir, safe_name(stem, 150), ".pdf")
+                outs.append(f"hold/{pdf_dst.name}" if held else pdf_dst.name)
+                shutil.copy2(part, pdf_dst.with_name(pdf_dst.name + ".tmp"))
+                os.replace(pdf_dst.with_name(pdf_dst.name + ".tmp"), pdf_dst)
+                f = o["fields"]
+                f["content_hash"] = sha256(part).upper()
+                gpu = o.get("lines_from") == "gpu"
+                sidecar = {
+                    "schema_version": 1,
+                    "doc_id": f"{digest[:16]}-p{o['pages'][0]:03d}",
+                    "doc_type": "customer_order",
+                    "folder": folder,
+                    "file": pdf_dst.name,
+                    "source_file": name,
+                    **({"source_folder": meta["source_folder"]} if meta.get("source_folder") else {}),
+                    "source_sha256": digest,
+                    "source_page": o["pages"][0],
+                    "source_pages": o["pages"],
+                    "pages_read": len(o["pages"]),
+                    "processed_at": now_iso(),
+                    "seconds": round(time.time() - t0, 1),
+                    "model": c["gpu_model"] if gpu else "zbar+tesseract+rules",
+                    "extractor": "co_gpu_after_cpu" if gpu else "co_cpu",
+                    "reader": "co_reader (sticker barcode, VAT -> account, lines CPU then vision model)",
+                    **({"hold_reason": o["hold"]} if held else {}),
+                    "needs_review": bool(o["flags"]),
+                    "flags": o["flags"],
+                    "fields": f,
+                }
+                atomic_write_json(pdf_dst.with_suffix(".json"), sidecar)
+                self.db.execute("INSERT INTO extractions VALUES(?,?,?,?,?)",
+                                (now_iso(), folder, src.name, sidecar["extractor"], json.dumps(o["flags"])))
+                log.info("%s %s p%s -> %s%s account=%s (%s) flags=%s", folder, src.name, ",".join(map(str, o["pages"])),
+                         pdf_dst.name, f" [held: {o['hold']}]" if held else "", f.get("customer_account"),
+                         f.get("account_how"), o["flags"])
+            up_note.unlink(missing_ok=True)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
