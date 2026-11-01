@@ -55,6 +55,11 @@ fi
 # 2. dataset + the current reader's reading of the test orders (cached per reader setup)
 if [ ! -e "$ROOT/PAUSE" ]; then echo "numbers pass fine-tune ($RUNID)" > "$ROOT/PAUSE"; MADE_PAUSE=1; say "worker paused"; fi
 sleep 90                             # let the worker finish the file it is on
+# 378: a restart later the same weekend reuses the dataset built since Saturday 17:00 (rebuilding takes ~2 h)
+if [ -z "${REUSE_DATA:-}" ] && [ $WEEKEND = 1 ] && [ -s $D/data/test.jsonl ]; then
+    WSTART=$([ "$DOW" = 6 ] && date -d "today 17:00" +%s || date -d "yesterday 17:00" +%s)
+    [ "$(stat -c %Y $D/data/test.jsonl)" -ge "$WSTART" ] && REUSE_DATA=1
+fi
 if [ "${REUSE_DATA:-0}" = 1 ] && [ -s $D/data/test.jsonl ] && [ -s $D/data/train.jsonl ]; then say "reusing the dataset built earlier"
 else say "building the dataset"; as_dinoc python3 $P/numbers_data.py --out $D/data --test-max $TEST_MAX || { say "dataset failed"; exit 1; }; fi
 NTRAIN=$(wc -l < $D/data/train.jsonl); NTEST=$(wc -l < $D/data/test.jsonl)

@@ -25,6 +25,7 @@ from unsloth import FastVisionModel, is_bf16_supported          # noqa: E402
 from unsloth.trainer import UnslothVisionDataCollator            # noqa: E402
 from trl import SFTTrainer, SFTConfig                            # noqa: E402
 from PIL import Image                                            # noqa: E402
+from torch.utils.data import Dataset                             # noqa: E402
 
 data, out = Path(a.data), Path(a.out)
 out.mkdir(parents=True, exist_ok=True)
@@ -33,10 +34,22 @@ if a.limit:
     rows = rows[:a.limit]
 print(f"{len(rows)} training orders", flush=True)
 (out / "prompt.txt").write_text(rows[0]["prompt"], encoding="utf-8")     # 335: the run reads with the prompt it learnt
-dataset = [{"messages": [
-    {"role": "user", "content": [{"type": "image", "image": Image.open(data / r["image"]).convert("RGB")},
-                                 {"type": "text", "text": r["prompt"]}]},
-    {"role": "assistant", "content": [{"type": "text", "text": r["answer"]}]}]} for r in rows]
+
+
+class Orders(Dataset):
+    """378: each page opened when the trainer asks for it (all 4,128 at once took 15 GB and the run was OOM-killed)"""
+    def __len__(self):
+        return len(rows)
+
+    def __getitem__(self, i):
+        r = rows[i]
+        return {"messages": [
+            {"role": "user", "content": [{"type": "image", "image": Image.open(data / r["image"]).convert("RGB")},
+                                         {"type": "text", "text": r["prompt"]}]},
+            {"role": "assistant", "content": [{"type": "text", "text": r["answer"]}]}]}
+
+
+dataset = Orders()
 
 model, tokenizer = FastVisionModel.from_pretrained(a.base, load_in_4bit=True, use_gradient_checkpointing="unsloth",
                                                   max_seq_length=a.max_seq)
