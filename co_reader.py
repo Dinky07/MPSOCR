@@ -569,19 +569,7 @@ def _orders(groups, texts, lk, c, scan_day, name):
             f["order_number_from"] = "scan" if f.get("order_number") else None
         # account (decision 13)
         if f.get("vat_number"):
-            acct, how, note, cands = lk.propose_account(f["vat_number"], f.get("order_number"))
-            f.update(customer_account=acct, account_how=how, account_note=note, vat_candidates=cands)
-            if acct:
-                cl = lk.clients.get(acct, {})
-                f["customer_name"] = cl.get("Name")
-                f["client_dclink"] = int(float(cl["DCLink"])) if cl.get("DCLink") else None
-                f["tax_type_id"] = int(float(cl["iDefTaxTypeID"])) if cl.get("iDefTaxTypeID") else None
-                if str(cl.get("On_Hold", "")).lower() in ("true", "1"):
-                    flags.append("account_on_hold")
-            if how in ("po_history_split", "most_recent"):
-                flags.append("account_" + how)
-            if acct and (acct, norm(f.get("order_number"))) in lk.sage_orders:
-                flags.append("already_in_sage")
+            account_from_vat(f, flags, lk)
         elif f.get("order_number"):
             acct, note = lk.account_from_po(f["order_number"])
             if acct:
@@ -665,6 +653,23 @@ def gpu_read(up_pdf, texts, c, log=None):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def account_from_vat(f, flags, lk):
+    """Decision 13: the account from the VAT number (PO history decides between accounts sharing it)."""
+    acct, how, note, cands = lk.propose_account(f["vat_number"], f.get("order_number"))
+    f.update(customer_account=acct, account_how=how, account_note=note, vat_candidates=cands)
+    if acct:
+        cl = lk.clients.get(acct, {})
+        f["customer_name"] = cl.get("Name")
+        f["client_dclink"] = int(float(cl["DCLink"])) if cl.get("DCLink") else None
+        f["tax_type_id"] = int(float(cl["iDefTaxTypeID"])) if cl.get("iDefTaxTypeID") else None
+        if str(cl.get("On_Hold", "")).lower() in ("true", "1"):
+            flags.append("account_on_hold")
+    if how in ("po_history_split", "most_recent"):
+        flags.append("account_" + how)
+    if acct and (acct, norm(f.get("order_number"))) in lk.sage_orders:
+        flags.append("already_in_sage")
+
+
 def apply_gpu(order, ans, lk, c):
     """Merge the vision model's answer into an order: its lines replace the CPU's when they add up; header fields
     fill gaps only (the CPU's checked values win). Returns the order."""
@@ -710,6 +715,7 @@ def apply_gpu(order, ans, lk, c):
         if v:
             f["vat_number"] = v
             flags[:] = [x for x in flags if x not in ("vat_missing", "vat_unknown")] + ["vat_from_gpu"]
+            account_from_vat(f, flags, lk)
     if not f.get("project_lead_written") and ans.get("written_name_top_left"):
         nm = str(ans["written_name_top_left"]).upper().strip()
         f["project_lead_written"] = nm if nm in c["file_handed"] else None
