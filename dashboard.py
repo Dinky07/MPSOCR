@@ -255,15 +255,33 @@ def storage_state(cfg):
     return st
 
 
+def alert_resolved(unit, at):
+    """389: the unit has finished a run successfully since the alert was raised at <at> (ISO). A reset-failed without
+    a new run doesn't count: it leaves the time the unit went inactive before the alert."""
+    try:
+        r = subprocess.run(["systemctl", "show", unit, "-p", "ActiveState", "-p", "Result", "-p", "InactiveEnterTimestamp",
+                            "--timestamp=unix"], capture_output=True, text=True, timeout=5)
+        p = dict(l.split("=", 1) for l in r.stdout.splitlines() if "=" in l)
+        ended = int(p.get("InactiveEnterTimestamp", "").lstrip("@") or 0)
+        return p.get("ActiveState") == "inactive" and p.get("Result") == "success" and \
+            ended > datetime.fromisoformat(at.strip()).timestamp()
+    except Exception:
+        return False
+
+
 def alert_flags(root):
     """flags/alert_<unit>: left by mps-alert@.service when a timer's job fails (review F9, 28 Oct); cleared from the
-    overview. Each file: first line = when, rest = the last journal lines."""
+    overview, or by itself once the unit has run successfully since (389). Each file: first line = when, rest = the
+    last journal lines."""
     out = []
     try:
         for e in sorted(os.scandir(root / "flags"), key=lambda e: e.name):
             if e.is_file() and e.name.startswith("alert_"):
                 t = e.path and Path(e.path).read_text(encoding="utf-8", errors="replace")
                 lines = t.strip().splitlines()
+                if lines and alert_resolved(e.name[6:], lines[0]):
+                    Path(e.path).unlink(missing_ok=True)
+                    continue
                 out.append({"flag": e.name, "unit": e.name[6:], "at": lines[0] if lines else "", "text": "\n".join(lines[1:])[-600:]})
     except FileNotFoundError:
         pass
