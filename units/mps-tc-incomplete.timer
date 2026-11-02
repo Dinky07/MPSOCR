@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS incomplete test certificates check every 15 min (Test Certs sync only on Sync now, so they're held first)
+[Timer]
+OnCalendar=*:05,20,35,50
+Persistent=false
+Unit=mps-tc-incomplete.service
+[Install]
+WantedBy=timers.target
