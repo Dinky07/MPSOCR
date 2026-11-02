@@ -1,0 +1,10 @@
+[Unit]
+Description=MPS one-off (Dino 2 Nov): rejoined whole scans / orphan pages on the PO holds fed again into in/PurchaseOrders to be sorted again
+OnFailure=mps-alert@%n.service
+[Service]
+Type=oneshot
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/orphan_refeed.py --apply
+TimeoutStartSec=1h

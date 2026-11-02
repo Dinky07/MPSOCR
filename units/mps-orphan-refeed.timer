@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS one-off: orphan / rejoined-scan refeed, Monday 2 Nov 2026 21:00 (after the numbers re-run and the 19:30 check; read overnight)
+[Timer]
+OnCalendar=2026-11-02 21:00:00
+Persistent=false
+Unit=mps-orphan-refeed.service
+[Install]
+WantedBy=timers.target

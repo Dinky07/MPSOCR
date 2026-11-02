@@ -54,8 +54,8 @@ def main():
                 sc = json.load(open(jp, encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            if sc.get("merged") or not sc.get("source_page"):
-                continue                            # whole scans and put-together documents are not orphans
+            if sc.get("merged") or sc.get("grouped_pages") or not sc.get("source_page"):
+                continue                            # whole scans and put-together documents are not orphans (423: grouped too)
             f = sc.get("fields") or {}
             h = str(sc.get("source_sha256") or "").lower()
             others = [w for w in where.get(h, []) if w["json"] != jp]
