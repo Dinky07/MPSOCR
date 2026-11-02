@@ -97,6 +97,22 @@ assert not (a.hold and a.park), "--hold or --park, not both"
 HELD = re.compile(r"^held: ")
 
 
+WAIT_DAYS = 7
+
+
+def young(f, sc):
+    """408: an order with no spreadsheet row waits this long for the row before the reader's values are enough (the
+    buying spreadsheet can lag behind the scans). Age from the order date; a date in the future (misread) doesn't wait."""
+    d = None
+    for v in (f.get("date"), str(sc.get("processed_at") or "")[:10]):
+        try:
+            d = datetime.strptime(str(v or "")[:10], "%Y-%m-%d").date()
+            break
+        except ValueError:
+            continue
+    return d is not None and 0 <= (datetime.now().date() - d).days < WAIT_DAYS
+
+
 def park(js, t):
     """queue -> hold, JSON first (the PC only syncs JSONs in out/<type>)."""
     with sidecar_lock.locked(js, "po_autocheck park"):
@@ -240,6 +256,8 @@ for t in ("PurchaseOrders", "PolymerOrders"):
                          and why.startswith("spreadsheet disagrees") and not blocking)
         if not why and not f.get("checked") and reg is None and a.no_reader_only:
             why = "no spreadsheet row (--no-reader-only)"
+        if not why and not f.get("checked") and reg is None and young(f, sc):
+            why = f"no spreadsheet row yet (waits {WAIT_DAYS} days from the order date)"
         how = None if why else ("already checked" if f.get("checked") else
                                 "auto: spreadsheet" if reg is not None else "auto: reader only")
         if how == "auto: spreadsheet" and sup_ok and [x for x in flags if SUP_FLAG.search(x)]:

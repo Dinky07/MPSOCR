@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS numbers pass re-run, once: Monday 2 Nov 2026 17:30 (after office hours, done before the 19:30 check)
+[Timer]
+OnCalendar=2026-11-02 17:30:00
+Persistent=false
+Unit=mps-numbers-redo.service
+[Install]
+WantedBy=timers.target

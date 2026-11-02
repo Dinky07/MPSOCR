@@ -25,6 +25,7 @@ ap.add_argument("--root", default="/srv/ocr/scans/pipeline")
 ap.add_argument("--dry-run", action="store_true", help="read and report, change nothing")
 ap.add_argument("--all-unchecked", action="store_true", help="every unchecked order in the queues, not just the day's batch")
 ap.add_argument("--limit", type=int, default=0)
+ap.add_argument("--redo-older", action="store_true", help="also orders passed by an older model run (408)")
 ap.add_argument("--count", action="store_true", help="only print how many orders would be passed (no GPU)")
 ap.add_argument("--px", type=int, default=1600)
 ap.add_argument("--all-orders", action="store_true", help="also orders that have a buying-register row (default: skip them - "
@@ -103,7 +104,9 @@ for pat in ("out/PurchaseOrders/*.json", "out/PurchaseOrders/hold/*.json", "out/
         except (OSError, ValueError):
             continue
         f = sc.get("fields") or {}
-        if sc.get("doc_type") != "po" or f.get("checked") or (sc.get("numbers_pass") or {}).get("applied") is not None:
+        prev = sc.get("numbers_pass") or {}
+        if sc.get("doc_type") != "po" or f.get("checked") or (prev.get("applied") is not None
+                                                                 and not (a.redo_older and prev.get("run") != run.name)):
             continue
         if shas is not None and str(sc.get("source_sha256") or "").lower() not in shas:
             continue
@@ -202,6 +205,8 @@ for n, (js, pdf) in enumerate(orders, 1):
             tot["lines_changed"] += len(rec["changed"])
             if rec["changed"]:
                 rebuild(f)
+        if sc.get("numbers_pass"):                                    # 408: a re-pass keeps the older record
+            sc.setdefault("numbers_pass_history", []).append(sc["numbers_pass"])
         sc["numbers_pass"] = rec
         if not a.dry_run:
             tmp = js.with_name(js.name + ".np.tmp")

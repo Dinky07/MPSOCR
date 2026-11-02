@@ -323,7 +323,22 @@ def watch(day, deadline_hour=15, poll=300):
             break
         time.sleep(poll)
     numbers_pass(day)
+    autocheck()
     build(day)
+
+
+def autocheck():
+    """408 (Dino 2 Nov): the day's clear orders are checked as soon as the batch is read, not only at 19:30 (queue, then
+    hold; same rules - an order with no spreadsheet row waits 7 days for it)."""
+    import subprocess
+    for args in (["--apply"], ["--hold", "--apply"]):
+        try:
+            r = subprocess.run([sys.executable, str(Path(__file__).resolve().with_name("po_autocheck.py"))] + args,
+                               capture_output=True, text=True, timeout=1800)
+            rep = [l for l in r.stdout.splitlines() if '"report"' in l]
+            print(f"autocheck {' '.join(args)}: rc={r.returncode} {rep[-1].strip() if rep else ''}", flush=True)
+        except Exception as ex:
+            print(f"autocheck {' '.join(args)}: {ex}", flush=True)
 
 
 def numbers_pass(day):
