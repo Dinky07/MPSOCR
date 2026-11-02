@@ -17,8 +17,10 @@ BY = "pop_move 2 Nov (Dino: move the 108 proofs of payment)"
 apply = "--apply" in sys.argv
 cfg = json.load(open("/srv/ocr/pipeline/config.json", encoding="utf-8"))
 D.record_move = lambda *a, **k: None
+# --flagged: the 11 Dino also approved (named PROOF OF PAYMENT, or read as one by the reader - 10 of them in his labels)
+flagged = "--flagged" in sys.argv
 rows = [r for r in csv.DictReader(open(ROOT / "reports" / "pop on po hold 2026-11-02 dry run.csv", encoding="utf-8-sig"))
-        if r["dry_run"].startswith("move")]
+        if (r["dry_run"].startswith(("check", "leave: no sign")) if flagged else r["dry_run"].startswith("move"))]
 hold = ROOT / "out" / "PurchaseOrders" / "hold"
 cnt, out = Counter(), []
 for r in rows:
@@ -50,5 +52,5 @@ print(dict(cnt), "of", len(rows))
 for d, w in out[:5] + [x for x in out if not x[1].startswith("in/")][:10]:
     print("  ", d[:60], "->", w)
 if apply:
-    with open(ROOT / "reports" / "pop on po hold 2026-11-02 moved.csv", "w", newline="", encoding="utf-8-sig") as fh:
+    with open(ROOT / "reports" / f"pop on po hold 2026-11-02 moved{' flagged' if flagged else ''}.csv", "w", newline="", encoding="utf-8-sig") as fh:
         w = csv.writer(fh); w.writerow(["document", "result"]); w.writerows(out)
