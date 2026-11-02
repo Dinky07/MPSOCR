@@ -338,7 +338,8 @@ def status(cfg):
         synced_today = 0
         try:
             for e in os.scandir(root / "synced" / t / month):
-                if e.name.endswith(".json") and date.fromtimestamp(e.stat().st_mtime).isoformat() == today:
+                # 397: st_ctime = when it was moved into synced/ (a move keeps the write time, from the day it was read)
+                if e.name.endswith(".json") and date.fromtimestamp(e.stat().st_ctime).isoformat() == today:
                     synced_today += 1
         except FileNotFoundError:
             pass
