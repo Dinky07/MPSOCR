@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS buying register re-parse at :15 and :45 (the PC copies the sheets at :00 / :30 and loads SQL after)
+[Timer]
+OnCalendar=*:15,45
+Persistent=false
+Unit=mps-registers.service
+[Install]
+WantedBy=timers.target

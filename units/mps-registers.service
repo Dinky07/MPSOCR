@@ -1,0 +1,11 @@
+[Unit]
+Description=MPS buying register: re-parse the buying spreadsheets when Dino's PC has copied a newer one (D270, Dino 2 Nov); nothing to do when unchanged
+OnFailure=mps-alert@%n.service
+[Service]
+Type=oneshot
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/usr/bin/python3 -c "import sys; sys.path.insert(0, '/srv/ocr/pipeline'); import po_daily; print(len(po_daily.registers()), 'orders in the buying register')"
+TimeoutStartSec=20min
+Nice=10
