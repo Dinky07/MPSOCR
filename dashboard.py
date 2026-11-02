@@ -965,6 +965,11 @@ EDITABLE = {
     "test_cert": ("cert_no", "cert_type", "date", "mill", "supplier", "customer", "purchaser", "mps_po", "ronin_po", "contract",
                   "family", "standard", "grade", "material_no"),
 }
+# 394: every editable field goes to the browser too - one the edit form doesn't get opens blank, and Save wiped it
+OUT_FIELDS = tuple(dict.fromkeys(OUT_FIELDS + tuple(k for ks in EDITABLE.values() for k in ks) + (
+    "vat_number", "vat_numbers_seen", "vat_candidates", "order_date", "total_vat", "customer_name", "account_how",
+    "account_note", "order_candidates", "order_number_from", "job_number_from", "lines_sum_excl", "lines_from",
+    "lines_from_workings", "project_lead_written", "project_lead_jobfile", "jobfile_order_number", "cod")))
 EDIT_LINES = {"po": ("quantity", "description", "unit_price", "price_unit"),
               "supplier_invoice": ("item_code", "description", "quantity", "unit_price", "amount"),
               "jt": ("item_no", "quantity", "unit", "description"),
@@ -989,11 +994,12 @@ def _edit_value(k, v, doc_type):
         if n is None:
             raise ValueError(f"{k}: '{v}' is not a number")
         return int(n) if k in ("quantity", "qty", "sheet_no", "sheet_of", "size_nb") and float(n).is_integer() else n
-    if k in ("date", "invoice_date", "stamp_date", "inspection_date", "signed_date"):
+    if k in ("date", "invoice_date", "stamp_date", "inspection_date", "signed_date", "order_date"):
+        m = re.fullmatch(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})", v)            # 394: 22/10/2026 as typed
         try:
-            return date.fromisoformat(v[:10]).isoformat()
+            return date(int(m.group(3)), int(m.group(2)), int(m.group(1))).isoformat() if m else date.fromisoformat(v[:10]).isoformat()
         except ValueError:
-            raise ValueError(f"{k}: use a date (YYYY-MM-DD)")
+            raise ValueError(f"{k}: use a date (YYYY-MM-DD or DD/MM/YYYY)")
     return v.upper() if k in ("order_number", "polymer_po", "jt_number", "job_number", "dn_number", "customer_account", "mps_dwg_no") else v
 
 
@@ -1109,6 +1115,8 @@ def edit_doc(root, t, body):
             continue
         new = _edit_value(k, v, dt)
         old = f.get(k)
+        if new is False and old is None:           # 394: a yes/no never read, left at No: not an edit
+            continue
         if (old if old != "" else None) != new:
             changes.append({"field": k, "old": old, "new": new})
             f[k] = new
