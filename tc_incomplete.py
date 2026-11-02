@@ -187,10 +187,11 @@ def main():
             parent[n] = parent[parent[n]]
             n = parent[n]
         return n
-    bykey = defaultdict(list)
+    bykey, loose = defaultdict(list), defaultdict(list)
     for n, (js, sc, k) in byname.items():
         for key in keys(sc):
-            bykey[key].append(n)
+            bykey[(key, family(sc))].append(n)     # joined only within one file / scanning session: one order has many certs
+            loose[key].append(n)                   # a match in another file: reported for Dino, not joined
     for key, ns in bykey.items():
         for n in ns[1:]:
             parent[find(n)] = find(ns[0])
@@ -223,10 +224,15 @@ def main():
                     row_of[n]["result"] += f" | {res}"
             cnt[res.split(":")[0]] += 1
         else:
+            other = sorted({m for n in names for key in keys(byname[n][1]) for m in loose[key] if m not in names})
             for n in names:
                 if n in row_of:
-                    row_of[n]["partners"] = ("in SharePoint: " + "; ".join(sp[:3])) if sp else ("; ".join(x for x in names if x != n) or "none yet")
-            cnt["partner in SharePoint (report only)" if sp else "no partner yet"] += 1
+                    row_of[n]["partners"] = "; ".join(filter(None, [
+                        ("same group: " + "; ".join(x for x in names if x != n)) if len(names) > 1 else "",
+                        ("possible, another file (not joined): " + "; ".join(other[:3])) if other else "",
+                        ("in SharePoint: " + "; ".join(sp[:3])) if sp else ""])) or "none yet"
+            cnt["possible partner in another file (report only)" if other else
+                "partner in SharePoint (report only)" if sp else "no partner yet"] += 1
     out = ROOT / "reports" / f"tc incomplete {datetime.now():%Y-%m-%d %H%M}{'' if a.apply else ' dry run'}.csv"
     with open(out, "w", newline="", encoding="utf-8-sig") as fh:
         w = csv.DictWriter(fh, fieldnames=["document", "source_file", "where", "kind", "cert_no", "keys", "partners", "result"])
