@@ -30,6 +30,8 @@ TS = ROOT / "work" / "sorter" / "testset"
 ORDER_FORMS = {"mps_order", "polymer_order", "internal_group_transfer"}
 LABEL = {"sales_quotation": "quotation", "pro_forma": "quotation", "internal_group_transfer": "purchase_order", "mps_invoice": "supplier_invoice",
          "release_note": "other"}
+# presort-6: a move labelled "other" into one of these Other Documents categories is that kind
+CAT_KIND = {v.lower(): k for k, v in presort.OD_CATEGORY.items()} if hasattr(presort, "OD_CATEGORY") else {}
 
 
 def label_of(t):
@@ -65,7 +67,10 @@ def eval_testset(a):
         for m in last.values():
             p = mv.parent / m["pdf"]
             if p.exists():
-                jobs.append(({"ID": "MOVE-" + m["id"] + "-p1", ti: m["type"], "Original file": m.get("original_file"), "Queue": m.get("from")}, p))
+                lab = m["type"]
+                if label_of(lab) == "other" and str(m.get("category") or "").lower() in CAT_KIND:
+                    lab = CAT_KIND[str(m["category"]).lower()]          # presort-6
+                jobs.append(({"ID": "MOVE-" + m["id"] + "-p1", ti: lab, "Original file": m.get("original_file"), "Queue": m.get("from")}, p))
     n_mv = len(jobs) - n_ts
     # Dino's labelled hold documents (work/sorter/labels/labels.xlsx, 30 Oct) are labelled pages too
     lx = ROOT / "work" / "sorter" / "labels" / "labels.xlsx"
@@ -109,6 +114,19 @@ def eval_testset(a):
     print("report:", p)
 
 
+def to_od(t, js, sc, pdf, cat, v):
+    """presort-6: as the dashboard's Move to Other Documents (summary, category, old copy to deleted/), but not recorded
+    as Dino's label: the pre-sort's own decision must not train the pre-sort."""
+    import dashboard as D
+    cfg = json.load(open("/srv/ocr/pipeline/config.json"))
+    cfg.setdefault("root", str(ROOT))
+    keep, D.record_move = D.record_move, (lambda *a, **k: None)
+    try:
+        return D.move_to_od(cfg, ROOT, t, js.name, js, sc, pdf, True, {"category": cat, "label": v.get("kind")})
+    finally:
+        D.record_move = keep
+
+
 def run(a):
     allow = {x.strip() for x in a.allow.split(",") if x.strip()}
     stamp = datetime.now().isoformat(timespec="seconds")
@@ -144,6 +162,9 @@ def run(a):
     for (t, js, sc, pdf), v in res:
         key = f"{v.get('kind')}:{v.get('strength')}"
         dest = v.get("dest")
+        od_cat = getattr(presort, "OD_CATEGORY", {}).get(v.get("kind"))     # presort-6: to Other Documents
+        if od_cat:
+            dest = "OtherDocuments"
         go = bool(dest) and dest != "PurchaseOrders" and key in allow
         result = ("would move to " if not a.apply else "moved to ") + dest if go else "stays"
         if go and a.apply:
@@ -151,6 +172,9 @@ def run(a):
                 with sidecar_lock.locked(js, "hold_resort"):
                     if not js.exists() or not pdf.exists():
                         result = "gone meanwhile"
+                    elif od_cat:
+                        r = to_od(t, js, sc, pdf, od_cat, v)
+                        result = f"moved to OtherDocuments / {od_cat}" + ("" if r.get("summary") else " (no summary)")
                     else:
                         d, md = ROOT / "in" / dest, ROOT / "in" / dest / "_meta"
                         md.mkdir(parents=True, exist_ok=True)

@@ -35,7 +35,7 @@ try:
 except Exception:                         # pragma: no cover
     ws_reader = None
 
-VERSION = "presort-5b (31 Oct: own letterhead at the top; no delivery note on certificates)"
+VERSION = "presort-6 (3 Nov: IDs, driver's licences, vehicle handovers / RC1s, collection slips -> Other Documents)"
 KINDS = {
     "purchase_order": "PurchaseOrders", "polymer_order": "PurchaseOrders", "pro_forma": "PurchaseOrders",
     "quotation": "PurchaseOrders", "statement": "PurchaseOrders", "credit_note": "PurchaseOrders",
@@ -44,6 +44,9 @@ KINDS = {
     "supplier_invoice": "SupplierInvoices", "delivery_note": "DeliveryNotes", "proof_of_payment": "ProofOfPayments",
     "workshop_sheet": "WorkshopSheets", "job_transfer": "JobTransfers", "test_cert": "TestCerts",
 }
+# presort-6: kinds that belong in Other Documents (category = Dino's folder); no queue, so the worker never routes them
+OD_CATEGORY = {"id_document": "ID", "drivers_licence": "Drivers Licence", "vehicle_handover": "Vehicle Handover",
+               "vehicle_registration": "Vehicle RC1", "collection_slip": "Collection Slips"}
 OWN_VAT = {"4320123039"}
 VATNO = re.compile(r"(?<!\d)(4\d{9})(?!\d)")
 
@@ -165,6 +168,31 @@ def verdict(pdf, name=None, folder=None, texts=None):
                 votes.append(("workshop_sheet", "likely", f"workshop sheet ({why})"))
         except Exception:
             pass
+
+    # presort-6 (Dino's hold corrections, 3 Nov): personal and vehicle papers filed with the orders
+    handover = has(r"\bVEHICLE HAND ?-?OVER\b")
+    if handover:
+        votes.append(("vehicle_handover", "likely", "vehicle handover letter"))
+    rc1 = [w for w, p in (("certificate of registration", r"CERTIFICATE OF REGISTRATION|SERTIFIKAAT VAN REGISTRASIE"),
+                          ("motor vehicle", r"\bMOTOR ?VEHICLE\b"), ("RC1", r"\bRC ?[1I]\b"),
+                          ("VIN / voertuig", r"VEHICLE IDENTIFICATION|\bVOERTUIG"),
+                          ("road traffic act", r"ROAD TRAFFIC ACT|PADVERKEERSWET"),
+                          ("registering authority", r"REGISTERING AUTHORITY|REGISTRASIE-? ?OWERHEID")) if has(p)]
+    if len(rc1) >= 2 and not handover:
+        votes.append(("vehicle_registration", "likely", "vehicle registration (" + ", ".join(rc1) + ")"))
+    idw = [w for w, p in (("ID no", r"\bI\.? ?D\.? ?NO\b|\bIDENTITY NUMBER\b"), ("SA citizen", r"\bS\.? ?A\.? ?(CITIZEN|BURGER)\b"),
+                          ("national identity", r"\bNATIONAL IDENTITY\b|\bIDENTITEITSDOKUMENT\b"),
+                          ("home affairs", r"\bHOME AFFAIRS\b|\bBINNELANDSE SAKE\b"), ("forenames", r"\bFORENAMES\b|\bVOORNAME\b"),
+                          ("place of birth", r"\bCOUNTRY OF BIRTH\b|\bGEBOORTEDISTRIK\b"),
+                          ("registered address", r"\bGEREGISTREERDE\b|\bWOON-? ?EN ?POSADRES\b|\bREGISTERED RESIDENTIAL\b")) if has(p)]
+    birth = has(r"\bBIRTH CERTIFICATE\b|\bGEBOORTESERTIFIKAAT\b|\bABRIDGED\b", T) or "BIRTH CERT" in str(name or pdf.name).upper()
+    if len(idw) >= 2 and not handover and not birth:          # birth certificates: not an ID (no category yet)
+        votes.append(("id_document", "likely", "identity document (" + ", ".join(idw) + ")"))
+    lic = has(r"\bDRIVING LICEN[CS]E\b|\bVEHICLE RESTRICTIONS?\b", T)     # not "licence no": a pro forma had one
+    if not handover and (lic or re.search(r"\bDRIVERS?'?S? ?LICEN[CS]E\b", str(name or pdf.name).upper())):
+        votes.append(("drivers_licence", "likely", "driving licence" + ("" if lic else " (file name)")))
+    if has(r"\bCOLLECTION SLIP\b", T):
+        votes.append(("collection_slip", "likely", "title: collection slip"))
 
     kinds = list(dict.fromkeys(k for k, _, _ in votes))
     if not kinds:
