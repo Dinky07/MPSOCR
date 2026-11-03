@@ -5,7 +5,9 @@ what the worker takes from a feed note - family and the old-site link (old_colum
 sync_mode), so a backfill cert still updates its existing library item - plus "reread_of"; the hold copy goes to
 deleted/TestCerts/<yyyy-mm>/ (recoverable). Skipped: checked, edited by a person, uploaded, locked. A re-read cert is
 taken off tc_incomplete's "released by a person" ledger, so if it still reads incomplete it is held again.
-    tc_reread.py [--apply]"""
+453 (Dino 3 Nov "Yes, re-read them"): --sideways re-reads only the certs whose first page Tesseract finds sideways
+(read upright by the reader since 453).
+    tc_reread.py [--apply] [--sideways]"""
 import csv, glob, json, os, re, shutil, sys
 from collections import Counter
 from datetime import datetime
@@ -13,12 +15,25 @@ from pathlib import Path
 
 sys.path.insert(0, "/srv/ocr/pipeline")
 import route_sort                                       # noqa: E402
+import tc_reader                                        # noqa: E402
 import sidecar_lock                                     # noqa: E402
 
 ROOT = Path("/srv/ocr/scans/pipeline")
 H, IN = ROOT / "out" / "TestCerts" / "hold", ROOT / "in" / "TestCerts"
 LEDGER = ROOT / "work" / "tc_incomplete" / "held.csv"
 apply = "--apply" in sys.argv
+only_sideways = "--sideways" in sys.argv
+
+
+def sideways(pdf):
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            return tc_reader.upright(tc_reader.render(str(pdf), 1, 1600, os.path.join(tmp, "p.png")))
+        except Exception:
+            return 0
+
+
 stamp = datetime.now().isoformat(timespec="seconds")
 md = IN / "_meta"
 cnt, rows, fed_hashes = Counter(), [], set()
@@ -31,6 +46,9 @@ for js in sorted(H.glob("*.json")):
     pdf = H / str(sc.get("file") or "")
     why = ("checked" if f.get("checked") else "edited by a person" if [e for e in sc.get("edits") or [] if "by" not in e] else
            "uploaded" if Path(str(js) + ".uploaded").exists() else "PDF missing" if not pdf.is_file() else None)
+    if not why and only_sideways and not sideways(pdf):
+        cnt["not sideways"] += 1
+        continue
     if why:
         cnt["skipped: " + why] += 1
         rows.append((js.name, "skipped: " + why))
@@ -48,7 +66,7 @@ for js in sorted(H.glob("*.json")):
             sc = json.load(open(js, encoding="utf-8"))
             f = sc.get("fields") or {}
             note = {"original_name": sc.get("source_file") or pdf.name, "reread_of": f"out/TestCerts/hold/{js.name}", "reread_at": stamp,
-                    "why": "test cert on hold re-read by the current reader (Dino 3 Nov)", "previous_hold_reason": sc.get("hold_reason")}
+                    "why": "test cert on hold re-read by the current reader (Dino 3 Nov)" + (", sideways: read upright (453)" if only_sideways else ""), "previous_hold_reason": sc.get("hold_reason")}
             for k2 in ("source_folder", "source_modified"):
                 if sc.get(k2):
                     note[k2] = sc[k2]
@@ -61,7 +79,7 @@ for js in sorted(H.glob("*.json")):
             (md / (name + ".json")).write_text(json.dumps(note, indent=1), encoding="utf-8")
             shutil.copy2(pdf, IN / (name + ".part"))
             try:
-                route_sort.remove(js, sc, "TestCerts", f"re-read by the current test-cert reader (3 Nov); fed as in/TestCerts/{name}", stamp)
+                route_sort.remove(js, sc, "TestCerts", f"re-read by the current test-cert reader (3 Nov{', upright' if only_sideways else ''}); fed as in/TestCerts/{name}", stamp)
             except Exception as e:
                 (IN / (name + ".part")).unlink(missing_ok=True)
                 (md / (name + ".json")).unlink(missing_ok=True)
@@ -82,7 +100,7 @@ if apply and fed_hashes and LEDGER.exists():
         w = csv.DictWriter(fh, fieldnames=["at", "content_hash"])
         w.writeheader()
         w.writerows(keep)
-out = ROOT / "reports" / f"tc reread {datetime.now():%Y-%m-%d %H%M}{'' if apply else ' dry run'}.csv"
+out = ROOT / "reports" / f"tc reread {datetime.now():%Y-%m-%d %H%M}{' sideways' if only_sideways else ''}{'' if apply else ' dry run'}.csv"
 with open(out, "w", newline="", encoding="utf-8-sig") as fh:
     w = csv.writer(fh)
     w.writerow(["document", "result"])
