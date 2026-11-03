@@ -152,6 +152,48 @@ def cached(key, ttl, fn, *args):
     return v
 
 
+_CPU = {}
+
+
+def cpu_state():
+    """491: CPU usage (% busy since the last look), temperature and load average for the GPU card."""
+    def times():
+        with open("/proc/stat") as fh:
+            v = [int(x) for x in fh.readline().split()[1:]]
+        return sum(v), v[3] + (v[4] if len(v) > 4 else 0)      # all, idle + iowait
+    out = {}
+    try:
+        a = times()
+        if "t" not in _CPU:
+            time.sleep(0.25)
+            _CPU["t"], a = a, times()
+        dt, di = a[0] - _CPU["t"][0], a[1] - _CPU["t"][1]
+        _CPU["t"] = a
+        out["util"] = round(100 * (dt - di) / dt) if dt > 0 else 0
+    except Exception:
+        pass
+    try:
+        for h in sorted(Path("/sys/class/hwmon").glob("hwmon*")):
+            name = (h / "name").read_text().strip()
+            if name in ("k10temp", "coretemp", "zenpower"):
+                for t in sorted(h.glob("temp*_input")):
+                    lbl = t.with_name(t.name.replace("_input", "_label"))
+                    lb = lbl.read_text().strip() if lbl.exists() else ""
+                    if lb in ("Tctl", "Tdie", "Package id 0") or "temp" not in out:
+                        out["temp"] = round(int(t.read_text()) / 1000)
+                        if lb in ("Tctl", "Tdie", "Package id 0"):
+                            break
+                break
+    except Exception:
+        pass
+    try:
+        out["load"] = round(os.getloadavg()[0], 1)
+        out["threads"] = os.cpu_count()
+    except Exception:
+        pass
+    return out
+
+
 def gpu_state():
     if not shutil.which("nvidia-smi"):
         return {"present": False}
@@ -382,6 +424,7 @@ def status(cfg):
         "sync_all_on": not (flags / "sync_off").exists(),
         "ollama": ollama_state(cfg),
         "gpu": cached("gpu", 10, gpu_state),
+        "cpu": cached("cpu", 10, cpu_state),                              # 491
         "alerts": alert_flags(root),
         "types": rows,
         "recent": recent,
@@ -2211,11 +2254,13 @@ function render(d){
     <div class="small muted">${o.version?"v"+esc(o.version):esc(o.error||"")}</div>
     ${(o.loaded||[]).map(m=>`<div class="small">Loaded: <b>${esc(m.name)}</b> · ${m.vram_mb} MB</div>`).join("")||`<div class="small muted">No model loaded</div>`}</div>`;
   const g=d.gpu;let gx;
-  if(!g.present||g.error)gx=`<div class="card"><h2><span class="dot bad"></span>GPU</h2><div class="big">${g.present?"error":"not found"}</div><div class="small muted">${esc(g.error||"")}</div></div>`;
+  const cp=d.cpu||{},cpx=cp.util==null&&cp.temp==null?"":`<div class="sec" style="margin-top:8px">CPU</div><div class="big">${cp.util??"?"}% · ${cp.temp??"?"}°C</div>
+    <div class="small muted">load ${cp.load??"?"} on ${cp.threads??"?"} threads</div><div class="bar"><i style="width:${Math.min(100,+cp.util||0)}%"></i></div>`;   // 491
+  if(!g.present||g.error)gx=`<div class="card"><h2><span class="dot bad"></span>GPU · CPU</h2><div class="big">${g.present?"error":"not found"}</div><div class="small muted">${esc(g.error||"")}</div>${cpx}</div>`;
   else{const pct=Math.round(100*g.mem_used/g.mem_total);
-    gx=`<div class="card"><h2><span class="dot ${+g.util>0?"ok":""}"></span>GPU</h2><div class="big">${g.util}% · ${g.temp}°C</div>
+    gx=`<div class="card"><h2><span class="dot ${+g.util>0?"ok":""}"></span>GPU · CPU</h2><div class="big">${g.util}% · ${g.temp}°C</div>
     <div class="small muted">${esc(g.name)} · ${(g.mem_used/1024).toFixed(1)} / ${(g.mem_total/1024).toFixed(0)} GB</div><div class="bar"><i style="width:${pct}%"></i></div>
-    ${g.procs.map(p=>`<div class="small" title="${esc(p.cmd)}" style="margin-top:4px">${esc(p.name)} · ${p.mem_mb} MB <span class="muted">${esc(p.cmd.includes("train")?"(training)":p.cmd.includes("ollama")?"(Ollama)":"")}</span></div>`).join("")}</div>`}
+    ${g.procs.map(p=>`<div class="small" title="${esc(p.cmd)}" style="margin-top:4px">${esc(p.name)} · ${p.mem_mb} MB <span class="muted">${esc(p.cmd.includes("train")?"(training)":p.cmd.includes("ollama")?"(Ollama)":"")}</span></div>`).join("")}${cpx}</div>`}
   const sy=d.sync||{},every=d.sync_every_minutes||15;const stale=sy.age==null||sy.age>every*120+120;
   const scls=!d.sync_all_on||sy.result=="paused"?"warn":stale?"bad":(sy.result=="ok"||sy.result=="idle")?"ok":"warn";
   const sx=`<div class="card"><h2><span class="dot ${scls}"></span>PC sync (${esc(sy.host||"MPS-DINO2023")})</h2>
