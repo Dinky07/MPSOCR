@@ -28,7 +28,8 @@ import sidecar_lock                                     # noqa: E402
 ROOT = Path("/srv/ocr/scans/pipeline")
 TS = ROOT / "work" / "sorter" / "testset"
 ORDER_FORMS = {"mps_order", "polymer_order", "internal_group_transfer"}
-LABEL = {"sales_quotation": "quotation", "pro_forma": "quotation", "internal_group_transfer": "purchase_order", "mps_invoice": "supplier_invoice",
+# 471b: sales_quotation is its own kind now (Kusasa / MPS quotes go to Sales Quotes)
+LABEL = {"pro_forma": "quotation", "internal_group_transfer": "purchase_order", "mps_invoice": "supplier_invoice",
          "release_note": "other"}
 # presort-6: a move labelled "other" into one of these Other Documents categories is that kind
 CAT_KIND = {v.lower(): k for k, v in presort.OD_CATEGORY.items()} if hasattr(presort, "OD_CATEGORY") else {}
@@ -84,7 +85,17 @@ def eval_testset(a):
                 jobs.append(({"ID": f"LBL-{d['ID']}-p1", ti: d["TYPE"], "Original file": d.get("Original file"),
                               "Queue": d.get("Original folder")}, p))
     n_lb = len(jobs) - n_ts - n_mv
-    print(f"test set {n_ts} pages + {n_mv} moved on the dashboard + {n_lb} labelled hold documents", flush=True)
+    # presort-7: Claude's study labels (work/sorter/study/<date>/labels_claude.json + pdf/), scored apart from Dino's
+    for st in sorted((ROOT / "work" / "sorter" / "study").glob("*/labels_claude.json")):
+        for sid, lab in json.load(open(st, encoding="utf-8")).items():
+            p = st.parent / "pdf" / f"{sid}.pdf"
+            t = lab["type"]
+            if label_of(t) == "other" and str(lab.get("category") or "").lower() in CAT_KIND:
+                t = CAT_KIND[str(lab["category"]).lower()]
+            if p.exists():
+                jobs.append(({"ID": f"STUDY-{st.parent.name}-{sid}-p1", ti: t}, p))
+    n_st = len(jobs) - n_ts - n_mv - n_lb
+    print(f"test set {n_ts} pages + {n_mv} moved on the dashboard + {n_lb} labelled hold documents + {n_st} study (Claude)", flush=True)
 
     def one(j):
         r, pdf = j
@@ -95,18 +106,22 @@ def eval_testset(a):
         v.pop("_page_text", None)
         return r, v
     stats = defaultdict(lambda: [0, 0])
+    sstats = defaultdict(lambda: [0, 0])                   # presort-7: the study labels apart
     wrong = []
     with ThreadPoolExecutor(max_workers=4) as ex:
         for r, v in ex.map(one, jobs):
             truth = label_of(r[ti])
             k = f"{v['kind']}:{v['strength']}"
-            stats[k][1] += 1
+            st_ = sstats if str(r["ID"]).startswith("STUDY-") else stats
+            st_[k][1] += 1
             if v["kind"] == truth:
-                stats[k][0] += 1
+                st_[k][0] += 1
             elif v["kind"] != "unsure":
                 wrong.append({"id": r["ID"], "verdict": k, "truth": truth, "signals": v.get("signals")})
     out = {"pages": len(jobs), "from_moves": n_mv, "from_labels": n_lb, "by_verdict": {k: {"right": s[0], "of": s[1], "precision": round(s[0] / s[1], 3)}
-                                             for k, s in sorted(stats.items())}, "wrong": wrong}
+                                             for k, s in sorted(stats.items())}, "study": n_st,
+           "study_by_verdict": {k: {"right": s[0], "of": s[1], "precision": round(s[0] / s[1], 3)} for k, s in sorted(sstats.items())},
+           "wrong": wrong}
     p = ROOT / "reports" / f"presort eval {datetime.now():%Y-%m-%d %H%M}.json"
     json.dump(out, open(p, "w"), indent=1)
     print(json.dumps({k: v for k, v in out.items() if k != "wrong"}, indent=1))
@@ -123,6 +138,18 @@ def to_od(t, js, sc, pdf, cat, v):
     keep, D.record_move = D.record_move, (lambda *a, **k: None)
     try:
         return D.move_to_od(cfg, ROOT, t, js.name, js, sc, pdf, True, {"category": cat, "label": v.get("kind")})
+    finally:
+        D.record_move = keep
+
+
+def to_sq_(t, js, sc, pdf, v):
+    """471b: as the dashboard's Move to Sales Quotes (read as a quote, old copy to deleted/), not recorded as a label."""
+    import dashboard as D
+    cfg = json.load(open("/srv/ocr/pipeline/config.json"))
+    cfg.setdefault("root", str(ROOT))
+    keep, D.record_move = D.record_move, (lambda *a, **k: None)
+    try:
+        return D.move_to_sq(cfg, ROOT, t, js.name, js, sc, pdf, True, {"label": v.get("kind")})
     finally:
         D.record_move = keep
 
@@ -165,6 +192,9 @@ def run(a):
         od_cat = getattr(presort, "OD_CATEGORY", {}).get(v.get("kind"))     # presort-6: to Other Documents
         if od_cat:
             dest = "OtherDocuments"
+        to_sq = v.get("kind") in getattr(presort, "SQ_KINDS", set())          # 471b: to Sales Quotes
+        if to_sq:
+            dest = "SalesQuotes"
         go = bool(dest) and dest != "PurchaseOrders" and key in allow
         result = ("would move to " if not a.apply else "moved to ") + dest if go else "stays"
         if go and a.apply:
@@ -172,6 +202,9 @@ def run(a):
                 with sidecar_lock.locked(js, "hold_resort"):
                     if not js.exists() or not pdf.exists():
                         result = "gone meanwhile"
+                    elif to_sq:
+                        r = to_sq_(t, js, sc, pdf, v)
+                        result = "moved to SalesQuotes" + ("" if r.get("read") else " (not read)")
                     elif od_cat:
                         r = to_od(t, js, sc, pdf, od_cat, v)
                         result = f"moved to OtherDocuments / {od_cat}" + ("" if r.get("summary") else " (no summary)")

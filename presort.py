@@ -35,7 +35,7 @@ try:
 except Exception:                         # pragma: no cover
     ws_reader = None
 
-VERSION = "presort-6 (3 Nov: IDs, driver's licences, vehicle handovers / RC1s, collection slips -> Other Documents)"
+VERSION = "presort-7 (3 Nov study: sideways scans re-read upright, tax invoices below the title, workshop sheet forms, Saheti)"
 KINDS = {
     "purchase_order": "PurchaseOrders", "polymer_order": "PurchaseOrders", "pro_forma": "PurchaseOrders",
     "quotation": "PurchaseOrders", "statement": "PurchaseOrders", "credit_note": "PurchaseOrders",
@@ -46,7 +46,32 @@ KINDS = {
 }
 # presort-6: kinds that belong in Other Documents (category = Dino's folder); no queue, so the worker never routes them
 OD_CATEGORY = {"id_document": "ID", "drivers_licence": "Drivers Licence", "vehicle_handover": "Vehicle Handover",
-               "vehicle_registration": "Vehicle RC1", "collection_slip": "Collection Slips"}
+               "vehicle_registration": "Vehicle RC1", "collection_slip": "Collection Slips", "saheti": "Saheti",
+               "letter": "Letter", "medical": "Medical"}
+SQ_KINDS = {"sales_quotation"}                             # 471b: to Sales Quotes (read there as a quote)
+COMMON = re.compile(r"\b(THE|AND|FOR|DATE|TOTAL|VAT|TEL|PAGE|INVOICE|ORDER|NUMBER|QTY|DESCRIPTION|AMOUNT|PRICE|NAME|ADDRESS|SIGNATURE|PTY|LTD)\b")
+
+
+def upright_text(pdf, text):
+    """presort-7: OCR text with no ordinary words (a sideways / upside-down scan) -> Tesseract's orientation check on
+    page 1 and, when it is turned, the page read again upright. None when it is upright or can't be judged."""
+    if len(COMMON.findall((text or "").upper())) >= 3:
+        return None
+    try:
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as td:
+            _run(["pdftoppm", "-png", "-r", "200", "-gray", "-f", "1", "-l", "1", "-singlefile", str(pdf), f"{td}/u"])
+            out = _run(["tesseract", f"{td}/u.png", "stdout", "--psm", "0"], 120).stdout.decode("utf8", "ignore")
+            rot, conf = re.search(r"Rotate:\s*(\d+)", out), re.search(r"Orientation confidence:\s*([\d.]+)", out)
+            deg = int(rot.group(1)) if rot else 0
+            if deg not in (90, 180, 270) or not conf or float(conf.group(1)) < 2:
+                return None
+            with Image.open(f"{td}/u.png") as im:
+                im.rotate(-deg, expand=True).save(f"{td}/r.png")
+            t2 = _run(["tesseract", f"{td}/r.png", "stdout", "--psm", "6"], 300).stdout.decode("utf8", "ignore")
+            return (t2, deg) if len(COMMON.findall(t2.upper())) > len(COMMON.findall((text or "").upper())) else None
+    except Exception:
+        return None
 OWN_VAT = {"4320123039"}
 VATNO = re.compile(r"(?<!\d)(4\d{9})(?!\d)")
 
@@ -102,6 +127,10 @@ def verdict(pdf, name=None, folder=None, texts=None):
     t0 = time.time()
     pdf = Path(pdf)
     text, src = page_text(pdf, texts)
+    if src != "text layer":                                # presort-7: a sideways scan's OCR is noise: read it upright
+        u = upright_text(pdf, text)
+        if u:
+            text, src = u[0], f"{src}, turned {u[1]}"
     T = _title(text)                                       # title area
     B = re.sub(r"\s+", " ", text or "").upper()            # whole page
     has = lambda pat, s=B: re.search(pat, s) is not None
@@ -128,6 +157,11 @@ def verdict(pdf, name=None, folder=None, texts=None):
         votes.append(("supplier_invoice", "sure" if (vat and inv_no) else "likely", "title: tax invoice" + (" + supplier VAT" if vat else "") + (" + invoice no" if inv_no else "")))
     elif has(r"\bTAX INVOICE\b", T):
         votes.append(("supplier_invoice", "likely", "title: tax invoice"))
+    # presort-7: "TAX INVOICE" below the title area (Daimler) or ACCOUNT / WARRANTY INVOICE (Hyundai), supplier VAT
+    if vat and not any(k == "supplier_invoice" for k, _, _ in votes) and has(r"\bTAX INVOICE\b|\bWARRANTY INVOICE\b") \
+            and not has(r"\bPRO ?-?FORMA\b|\bQUOTATION\b|\bCREDIT NOTE\b|\bSTATEMENT\b|\bDELIVERY NOTE\b|\bPURCHASE ORDER\b|\bORDER (NO|NUMBER)\b", T) \
+            and (inv_no or has(r"\bBILL TO\b|\bINVOICE (DATE|NUMBER|NO)\b|\bDOCUMENT NO\b")):
+        votes.append(("supplier_invoice", "likely", "tax / warranty invoice below the title + supplier VAT + invoice no"))
     if has(r"\bCREDIT NOTE\b", T):
         votes.append(("credit_note", "likely", "title: credit note"))
     if has(r"\bQUOTATION\b|\bQUOTE\b", T) and not has(r"\bTAX INVOICE\b", T):
@@ -155,6 +189,26 @@ def verdict(pdf, name=None, folder=None, texts=None):
         votes.append(("polymer_order" if has(r"\bPOLYMER LINERS\b|\bPL ?\d{4}\b") else "purchase_order", "likely", "MPS order form wording"))
     elif has(r"\bPOLYMER LINERS\b", T) and has(r"\bORDER\b", T):
         votes.append(("polymer_order", "likely", "Polymer order form wording"))
+    # presort-7: workshop sheet forms the drawing check misses (handwritten ones, printed title blocks)
+    wsw = [w for w, p in (("sheet x of y", r"\b(SHEET|SHT)\.? ?:? ?\d{1,2} ?(OF|-) ?\d{1,2}\b"), ("destination", r"\bDESTINATION\b"),
+                          ("corrosion", r"\bCORROSION ?(INT|EXT)"), ("issued for construction", r"ISSUED FOR CONSTRUCTION|\bQ ?A APPROVED\b"),
+                          ("MPS dwg", r"\bMPS DWG\b")) if has(p)]
+    if len(wsw) >= 2 and not has(r"\bTAX INVOICE\b|\bQUOTATION\b|\bPRO ?-?FORMA\b|\bSTATEMENT\b|\bCERTIFICATE\b|\bREQUISITION\b", T) \
+            and not heat and not has(r"CERTIFICAT|\bMILL\b|CHEMICAL|\bTENSILE\b"):
+        votes.append(("workshop_sheet", "likely", "workshop sheet form (" + ", ".join(wsw) + ")"))
+    if has(r"\bOEM LETTER\b|\bDECLARATION BY PRODUCER\b") and has(r"\bRULES OF ORIGIN\b|\bHEREBY DECLARE\b|\bPRODUCER\b"):
+        votes.append(("letter", "likely", "OEM letter (declaration by producer)"))
+    med = [w for w, q in (("practice no", r"\bPRACTICE (NO|NUMBER|NR)\b|\bPR\.? ?NO\b"), ("medical aid", r"\bMEDICAL AID\b|\bMED\.? ?AID\b|\bDISCOVERY\b"),
+                          ("patient", r"\bPATIENT\b"), ("ICD-10", r"\bICD ?-? ?10\b"), ("HPCSA", r"\bHPCSA\b"),
+                          ("doctor", r"\bDR\.? [A-Z]|\bPHYSIOTHERAPIST\b|\bOPHTHALMOLOGIST\b|\bDENTIST\b|\bORTHODONTIST\b|\bDERMATOLOGIST\b|\bGYNAECOLOGIST\b|\bOPTOMETRIST\b")) if has(q)]
+    if len(med) >= 2 and has(r"\bPRACTICE (NO|NUMBER|NR)\b|\bPR\.? ?NO\b|\bMEDICAL AID\b|\bMED\.? ?AID\b|\bPATIENT\b|\bHPCSA\b"):
+        votes.append(("medical", "likely", "medical (" + ", ".join(med) + ")"))
+    fname = str(name or pdf.name).upper()
+    if (has(r"\bMPSHQ ?-? ?\d{4,6}\b") or re.search(r"QUOTE?S? APP?ROVAL|MPSHQ", fname)) and has(r"\bQUOT(E|ATION)\b") \
+            and (own_head or has(r"\bKUSASA\b|\bMINING PRESSURE SYS", T)):
+        votes.append(("sales_quotation", "likely", "MPS / Kusasa sales quote (MPSHQ)"))
+    if has(r"\bPURCHASE REQUISITION\b") and has(r"\bBOARD MEMBER\b|\bNO ?1 ACCOUNT\b|\bSAHETI\b"):
+        votes.append(("saheti", "likely", "Saheti purchase requisition"))
     if pop_reader:
         try:
             if pop_reader.is_payment_page(text):
@@ -194,6 +248,10 @@ def verdict(pdf, name=None, folder=None, texts=None):
     if has(r"\bCOLLECTION SLIP\b", T):
         votes.append(("collection_slip", "likely", "title: collection slip"))
 
+    # 471b: a doctor's statement / invoice is medical, an OEM letter is a letter, our own quote is a sales quote,
+    # whatever its title says
+    if any(k in ("medical", "letter", "sales_quotation") for k, _, _ in votes):
+        votes = [x for x in votes if x[0] not in ("statement", "supplier_invoice", "quotation", "credit_note", "purchase_order", "polymer_order")]
     kinds = list(dict.fromkeys(k for k, _, _ in votes))
     if not kinds:
         kind, strength = "unsure", "unsure"
