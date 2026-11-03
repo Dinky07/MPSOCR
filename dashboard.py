@@ -1454,6 +1454,7 @@ MOVE_TYPES = [
     ("polymer_order", "Polymer Liners order", "PolymerOrders", None),
     ("ronin_order", "Ronin purchase order", "RoninOrders", None),
     ("customer_order", "Customer order (MPS is the supplier)", "CustomerOrders", None),
+    ("PO_Cancellation", "Customer's purchase order cancellation", "CustomerOrders", None),          # 476
     ("supplier_invoice", "Supplier tax invoice", "SupplierInvoices", None),
     ("supplier_invoice", "Supplier invoice (archive)", "SupplierInvoicesArchive", None),
     ("proof_of_payment", "Proof of payment", "ProofOfPayments", None),
@@ -1476,10 +1477,20 @@ MOVE_TYPES = [
     ("Collection_Slip", "Collection slip", "OtherDocuments", "Collection Slips"),
     ("Inspection_Report", "Inspection report", "OtherDocuments", "Inspection Reports"),
     ("Leave_Form", "Leave form", "OtherDocuments", "Leave Forms"),
+    ("medical", "Medical (doctor's account, prescription, referral)", "OtherDocuments", "Medical"),  # 476
+    ("saheti", "Saheti (purchase requisition etc.)", "OtherDocuments", "Saheti"),
+    ("vehicle_handover", "Vehicle handover letter", "OtherDocuments", "Vehicle Handover"),
+    ("vehicle_registration", "Vehicle registration (RC1)", "OtherDocuments", "Vehicle RC1"),
+    ("sketch", "Sketch / hand drawing", "OtherDocuments", "Sketch"),
+    ("mps_databook", "MPS databook", "OtherDocuments", "MPS Databook"),
+    ("goods_returned_waybill", "Customer goods-returned waybill", "OtherDocuments", "Customer Goods Returned Waybill"),
+    ("sars", "SARS document", "OtherDocuments", "SARS"),
     ("ID_Document", "ID document", "OtherDocuments", "name:ID"),
     ("Drivers_Licence", "Driver's licence", "OtherDocuments", "name:Drivers Licence"),
     ("other", "Other (choose a category)", "OtherDocuments", "?"),
     ("MPS_Invoice", "MPS sales invoice (deleted: reprint it from Sage)", "delete", None),
+    ("MPS_Sales_Order", "MPS sales order / pro forma (deleted: reprint it from Sage)", "delete", None),   # 476
+    ("delete", "Mark for deletion (not needed)", "delete", None),
 ]
 
 
