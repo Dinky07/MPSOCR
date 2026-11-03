@@ -12,7 +12,9 @@ the hold reason recounted; the reader's form kept as form_read and the change in
 po_autocheck --hold releases what is then clear. Skipped: checked, uploaded, merged scans, locked sidecars.
 DRY RUN unless --apply. -> reports/ownform fix <stamp>[ dry run].csv
 
-    python3 ownform_fix.py [--apply]
+--queue (Dino 3 Nov: own orders filed as Other in the Purchase Order queue) also corrects the queues
+(out/<type>/*.json): there only the form changes, nothing is put on hold.
+    python3 ownform_fix.py [--apply] [--queue]
 """
 import argparse, csv, glob, json, os, re, sys
 from collections import Counter
@@ -58,12 +60,17 @@ def judge(sc, text, text2=""):
             continue
         if not any(re.search(head, t) for t in Ts) or any(OTHER_TITLE.search(t) for t in Ts):
             return None
+        in_name = re.search(rf"(?<![A-Z0-9]){on[:n]}\s?-?{on[n:]}(?!\d)", src)
         if not re.search(rf"\bORDER\s*:?\s*{pre}\s*[0-9/]", B):
+            # 3 Nov: the printed "ORDER A <n>" OCR'd badly (struck-through CANCELLED forms): the ORDER heading, the
+            # number in the original file name and a signature or order lines the reader found
+            if re.search(r"\bORDER\b", B) and in_name and (f.get("signed_by") or f.get("items")):
+                return kind, on, f"letterhead + ORDER heading, {on} in the original file name, signed / lines read"
             return None
-        ocr = [digits(x) for x in re.findall(rf"\bORDER\s*:?\s*{pre}\s*([0-9][0-9 ]{{3,7}})", B)]
+        ocr =[digits(x) for x in re.findall(rf"\bORDER\s*:?\s*{pre}\s*([0-9][0-9 ]{{3,7}})", B)]
         if on[n:] in ocr:
             return kind, on, f"letterhead + printed ORDER {on[:n]} {on[n:]}"
-        if re.search(rf"(?<![A-Z0-9]){on[:n]}\s?-?{on[n:]}(?!\d)", src):
+        if in_name:
             return kind, on, f"letterhead + printed ORDER {on[:n]}, {on} also in the original file name"
         return None
     if form in ("internal_group_transfer", "not_an_order") and not on:
@@ -79,7 +86,7 @@ def judge(sc, text, text2=""):
     return None
 
 
-def fix(js, sc, new_form, new_on, why, stamp):
+def fix(js, sc, new_form, new_on, why, stamp, held=True):
     f = sc["fields"]
     changes = []
 
@@ -99,11 +106,14 @@ def fix(js, sc, new_form, new_on, why, stamp):
     drop = {"not_an_order", "missing_order_number"}
     old_flags = list(sc.get("flags") or [])
     keep = [x for x in old_flags if x not in drop and not HELD.match(str(x))]
-    reason = f"review checks ({len(keep)})"
-    if sc.get("hold_reason") != reason:
-        changes.append({"field": "hold_reason", "old": sc.get("hold_reason"), "new": reason})
-    sc["hold_reason"] = reason
-    sc["flags"] = keep + ["held: " + reason]
+    if held:
+        reason = f"review checks ({len(keep)})"
+        if sc.get("hold_reason") != reason:
+            changes.append({"field": "hold_reason", "old": sc.get("hold_reason"), "new": reason})
+        sc["hold_reason"] = reason
+        sc["flags"] = keep + ["held: " + reason]
+    else:
+        sc["flags"] = keep
     sc["needs_review"] = bool(keep)
     sc.setdefault("edits", []).append({"at": stamp, "by": f"ownform_fix (Dino 30 Oct: {why})", "changes": changes})
     tmp = js.with_name(js.name + ".of.tmp")
@@ -115,18 +125,21 @@ def fix(js, sc, new_form, new_on, why, stamp):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--queue", action="store_true")
+    ap.add_argument("--names", default="", help="file names (comma separated) corrected even when checked (Dino's list)")
     a = ap.parse_args()
     stamp = datetime.now().isoformat(timespec="seconds")
     rows, cnt = [], Counter()
     for t in ("PurchaseOrders", "PolymerOrders"):
-        for js in sorted(glob.glob(str(ROOT / "out" / t / "hold" / "*.json"))):
+        for js in sorted(glob.glob(str(ROOT / "out" / t / "hold" / "*.json")) + (glob.glob(str(ROOT / "out" / t / "*.json")) if a.queue else [])):
             js = Path(js)
             try:
                 sc = json.load(open(js, encoding="utf-8"))
             except Exception:
                 continue
             f = sc.get("fields") or {}
-            if sc.get("doc_type") != "po" or f.get("checked") or Path(str(js) + ".uploaded").exists():
+            named = any(n and js.name.startswith(n) for n in a.names.split(","))
+            if sc.get("doc_type") != "po" or (f.get("checked") and not named) or Path(str(js) + ".uploaded").exists():
                 continue
             on = str(f.get("order_number") or "").upper().replace(" ", "")
             cand = ((f.get("form") == "not_an_order" and re.fullmatch(r"A\d{5}|PL\d{4}", on))
@@ -154,14 +167,14 @@ def main():
                 try:
                     with sidecar_lock.locked(js, "ownform_fix"):
                         sc = json.load(open(js, encoding="utf-8"))
-                        if (sc.get("fields") or {}).get("checked"):
+                        if (sc.get("fields") or {}).get("checked") and not named:
                             res = "skipped (checked meanwhile)"
                         else:
-                            fix(js, sc, *j, stamp)
+                            fix(js, sc, *j, stamp, held=js.parent.name == "hold")
                 except sidecar_lock.Locked:
                     res = "locked (left)"
             cnt[res] += 1
-            rows.append({"type": t, "file": js.name, "source_file": sc.get("source_file"), "form_read": f.get("form"),
+            rows.append({"type": t, "where": js.parent.name, "file": js.name, "source_file": sc.get("source_file"), "form_read": f.get("form"),
                          "po_doc_type": f.get("po_doc_type"), "order_read": on, "new_form": j[0] if j else "",
                          "new_order": j[1] if j else "", "evidence": j[2] if j else "", "result": res,
                          "flags": "; ".join(str(x) for x in (sc.get("flags") or []))[:300],
