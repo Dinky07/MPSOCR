@@ -42,6 +42,34 @@
     "recursive": false,
     "pattern": "*.pdf",
     "only_newer_than": "2026-10-09"
+   },
+   {
+    "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts",
+    "type_folder": "TestCerts",
+    "recursive": false,
+    "pattern": "*.pdf",
+    "only_newer_than": "2026-11-03"
+   },
+   {
+    "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Fittings",
+    "type_folder": "TestCerts",
+    "recursive": false,
+    "pattern": "*.pdf",
+    "only_newer_than": "2026-11-03"
+   },
+   {
+    "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Flanges",
+    "type_folder": "TestCerts",
+    "recursive": false,
+    "pattern": "*.pdf",
+    "only_newer_than": "2026-11-03"
+   },
+   {
+    "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Pipe",
+    "type_folder": "TestCerts",
+    "recursive": false,
+    "pattern": "*.pdf",
+    "only_newer_than": "2026-11-03"
    }
   ]
  },
