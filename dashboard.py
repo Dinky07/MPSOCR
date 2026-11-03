@@ -863,7 +863,8 @@ def out_queue(cfg, t, limit=300, sorts=None, check=None):
     sap = sage_ap(root) if cfg["doc_types"][t].get("doc_type") == "supplier_invoice" or t.startswith("SupplierInvoices") else None
     spo = sage_po(root) if t == "PolymerOrders" else None
     res = {"type": t, "ready": [], "held": [], "ready_total": 0, "held_total": 0, "limit": limit, "sp_map": bool(tmap), "writers": writers(cfg), "units": units(cfg),
-           "sage_rows": sap["rows"] if sap else None, "sage_at": sap.get("at") if sap else None, "route_to": route_targets(cfg)}
+           "sage_rows": sap["rows"] if sap else None, "sage_at": sap.get("at") if sap else None, "route_to": route_targets(cfg),
+           "route_types": move_types(cfg)}
     for key, d in (("ready", root / "out" / t), ("held", root / "out" / t / "hold")):
         try:
             files = sorted((e for e in os.scandir(d) if e.is_file() and e.name.endswith(".json")), key=lambda e: e.stat().st_mtime)
@@ -1444,7 +1445,51 @@ MOVE_LABEL = {"PurchaseOrders": "purchase_order", "PolymerOrders": "polymer_orde
               "WorkshopSheets": "workshop_sheet", "TestCerts": "test_cert", "ReleaseNotes": "release_note", "OtherDocuments": "other"}
 
 
-def record_move(root, t, dest, side, pdf, on_hold, category=None):
+# 464: Move to... by document type (labels.xlsx Types, Dino 3 Nov): (type, label, where, category). where: a queue
+# (read again there), "OtherDocuments" (category; "?" asks for it, "name" also asks whose document), "SalesQuotes", or
+# "delete". Queues not in config are left out.
+MOVE_TYPES = [
+    ("purchase_order", "Purchase order (MPS / Kusasa, incl. cancelled / amended)", "PurchaseOrders", None),
+    ("Internal_Group_Transfer", "Internal group transfer (IGT)", "PurchaseOrders", None),
+    ("polymer_order", "Polymer Liners order", "PolymerOrders", None),
+    ("ronin_order", "Ronin purchase order", "RoninOrders", None),
+    ("customer_order", "Customer order (MPS is the supplier)", "CustomerOrders", None),
+    ("supplier_invoice", "Supplier tax invoice", "SupplierInvoices", None),
+    ("supplier_invoice", "Supplier invoice (archive)", "SupplierInvoicesArchive", None),
+    ("proof_of_payment", "Proof of payment", "ProofOfPayments", None),
+    ("delivery_note", "MPS delivery note (IN number)", "DeliveryNotes", None),
+    ("job_transfer", "Job transfer", "JobTransfers", None),
+    ("job_transfer", "Ronin job transfer", "RoninJobTransfers", None),
+    ("workshop_sheet", "Workshop sheet", "WorkshopSheets", None),
+    ("test_cert", "Test certificate", "TestCerts", None),
+    ("Release_Note", "Release note", "ReleaseNotes", None),
+    ("Sales_Quotation", "MPS / Kusasa sales quotation", "SalesQuotes", None),
+    ("quotation", "Supplier quotation / pro forma", "OtherDocuments", "Quotations"),
+    ("credit_note", "Supplier credit note", "OtherDocuments", "Credit Notes"),
+    ("statement", "Supplier statement", "OtherDocuments", "Statements"),
+    ("supplier_delivery_note", "Supplier delivery note / waybill", "OtherDocuments", "Supplier Delivery Notes"),
+    ("order_acknowledgement", "Order acknowledgement", "OtherDocuments", "Order Acknowledgements"),
+    ("letter", "Letter", "OtherDocuments", "Letter"),
+    ("memo", "Memo", "OtherDocuments", "Memo"),
+    ("contract", "Contract / agreement", "OtherDocuments", "Contracts"),
+    ("contract_cancellation", "Contract cancellation", "OtherDocuments", "Contracts"),
+    ("Collection_Slip", "Collection slip", "OtherDocuments", "Collection Slips"),
+    ("Inspection_Report", "Inspection report", "OtherDocuments", "Inspection Reports"),
+    ("Leave_Form", "Leave form", "OtherDocuments", "Leave Forms"),
+    ("ID_Document", "ID document", "OtherDocuments", "name:ID"),
+    ("Drivers_Licence", "Driver's licence", "OtherDocuments", "name:Drivers Licence"),
+    ("other", "Other (choose a category)", "OtherDocuments", "?"),
+    ("MPS_Invoice", "MPS sales invoice (deleted: reprint it from Sage)", "delete", None),
+]
+
+
+def move_types(cfg):
+    have = set(cfg.get("doc_types", {}))
+    return [{"key": f"{k}|{w}", "type": k, "label": lbl, "dest": w, "category": c}
+            for k, lbl, w, c in MOVE_TYPES if w == "delete" or w in have]
+
+
+def record_move(root, t, dest, side, pdf, on_hold, category=None, label=None):
     """Every Move to... is a label for the pre-sort (341): a copy of the PDF and a line in work/sorter/moves/moves.jsonl;
     hold_resort.py eval scores the pre-sort on them with Dino's test set. Never stops the move."""
     try:
@@ -1454,7 +1499,7 @@ def record_move(root, t, dest, side, pdf, on_hold, category=None):
         mid = h[:16]
         if not (d / "pdf" / f"{mid}.pdf").exists():
             shutil.copy2(pdf, d / "pdf" / f"{mid}.pdf")
-        rec = {"id": mid, "pdf": f"pdf/{mid}.pdf", "type": MOVE_LABEL.get(dest, "other"), "to": dest, "from": t, "held": bool(on_hold),
+        rec = {"id": mid, "pdf": f"pdf/{mid}.pdf", "type": label or MOVE_LABEL.get(dest, "other"), "to": dest, "from": t, "held": bool(on_hold),
                "category": category, "read_as": side.get("doc_type"), "flags": (side.get("flags") or [])[:8],
                "original_file": side.get("source_file"), "source_folder": side.get("source_folder"), "source_page": side.get("source_page"),
                "content_hash": h.upper(), "at": datetime.now().isoformat(timespec="seconds"), "by": "dashboard"}
@@ -1498,7 +1543,8 @@ def move_to_od(cfg, root, t, name, js, side, pdf, on_hold, body):
         ex.shutdown(wait=False)
     f = side.get("fields") or {}
     stamp = datetime.now().isoformat(timespec="seconds")
-    fields = {"summary": s.get("summary"), "od_doc_type": s.get("doc_type"), "od_from": s.get("from"),
+    who = re.sub(r'[\\/:*?"<>|#%]+', " ", str(body.get("person") or "")).strip()[:80]          # 464: ID / licence
+    fields = {"summary": (f"{cat}: {who}" if who else s.get("summary")), "od_doc_type": s.get("doc_type"), "od_from": who or s.get("from"),
               "date": s.get("date") or f.get("date") or f.get("invoice_date"),
               "order_number": s.get("order_number") or f.get("order_number"), "job_number": s.get("job_number") or f.get("job_number"),
               "od_category": cat, "od_rule": "dashboard (Move to)", "od_evidence": "",
@@ -1506,9 +1552,13 @@ def move_to_od(cfg, root, t, name, js, side, pdf, on_hold, body):
               "review": note, "library_doc_type": "Other Document"}
     dest = root / "out" / "OtherDocuments"
     dest.mkdir(parents=True, exist_ok=True)
-    new, k = pdf.name, 2
+    if who:                                                         # 464: named after the person
+        pdf_name = f"{cat} - {who}{pdf.suffix}"
+    else:
+        pdf_name = pdf.name
+    new, k = pdf_name, 2
     while (dest / new).exists() or (dest / (Path(new).stem + ".json")).exists():
-        new, k = f"{pdf.stem}_{k}{pdf.suffix}", k + 1
+        new, k = f"{Path(pdf_name).stem}_{k}{pdf.suffix}", k + 1
     sc = {"schema_version": 1, "doc_id": side.get("doc_id"), "doc_type": "other_doc", "folder": "OtherDocuments", "file": new,
           "source_file": side.get("source_file"), **({"source_folder": side["source_folder"]} if side.get("source_folder") else {}),
           "source_sha256": side.get("source_sha256"), "source_page": side.get("source_page"), "processed_at": side.get("processed_at"),
@@ -1520,7 +1570,7 @@ def move_to_od(cfg, root, t, name, js, side, pdf, on_hold, body):
     tmp = dest / (Path(new).stem + ".json.tmp")
     tmp.write_text(json.dumps(sc, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     os.replace(tmp, dest / (Path(new).stem + ".json"))
-    record_move(root, t, "OtherDocuments", side, pdf, on_hold, cat)  # 341: a label for the pre-sort
+    record_move(root, t, "OtherDocuments", side, pdf, on_hold, cat, body.get("label"))  # 341: a label for the pre-sort
     gone = root / "deleted" / t / datetime.now().strftime("%Y-%m")
     gone.mkdir(parents=True, exist_ok=True)
     for q in (pdf, Path(str(js) + ".attempts"), js):
@@ -1531,11 +1581,56 @@ def move_to_od(cfg, root, t, name, js, side, pdf, on_hold, body):
     return {"ok": True, "to": "OtherDocuments", "name": new, "summary": bool(fields["summary"])}
 
 
+def move_to_sq(cfg, root, t, name, js, side, pdf, on_hold, body):
+    """464: to the Sales Quotes out queue, read as route_sort reads a quote (the model may be busy: then a note)."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+    import route_sort
+    vcfg = {"model": "qwen2.5vl:7b", "ollama_url": cfg.get("ollama_url", "http://127.0.0.1:11434"), "num_ctx": int(cfg.get("num_ctx", 49152))}
+    src = str(side.get("source_file") or pdf.name)
+    note, ex = None, ThreadPoolExecutor(max_workers=1)
+    try:
+        q = ex.submit(lambda: route_sort.read_quote(pdf, route_sort.text_of(pdf), vcfg, src)).result(timeout=120) or {}
+    except FutureTimeout:
+        q, note = {}, "not read (the model was busy): fill the quote fields in SharePoint"
+    except Exception as e:
+        q, note = {}, f"not read: {str(e)[:120]}"
+    finally:
+        ex.shutdown(wait=False)
+    stamp = datetime.now().isoformat(timespec="seconds")
+    fields = dict(q, moved_from=f"{t} ({'on hold' if on_hold else 'queue'})", review=note,
+                  content_hash=hashlib.sha256(pdf.read_bytes()).hexdigest().upper())
+    dest = root / "out" / "SalesQuotes"
+    dest.mkdir(parents=True, exist_ok=True)
+    new, k = pdf.name, 2
+    while (dest / new).exists() or (dest / (Path(new).stem + ".json")).exists():
+        new, k = f"{pdf.stem}_{k}{pdf.suffix}", k + 1
+    sc = {"schema_version": 1, "doc_id": side.get("doc_id"), "doc_type": "sales_quote", "folder": "SalesQuotes", "file": new,
+          "source_file": side.get("source_file"), **({"source_folder": side["source_folder"]} if side.get("source_folder") else {}),
+          "source_sha256": side.get("source_sha256"), "source_page": side.get("source_page"), "processed_at": side.get("processed_at"),
+          "model": "qwen2.5vl:7b (quote)", "extractor": "dashboard", "needs_review": bool(note), "flags": [], "fields": fields,
+          "previous": {"folder": t, "sidecar": f"out/{t}/{'hold/' if on_hold else ''}{name}", "doc_type": side.get("doc_type"), "fields": side.get("fields")},
+          "edits": (side.get("edits") or []) + [{"at": stamp, "by": "dashboard (Move to)", "changes": [{"field": "folder", "old": t, "new": "SalesQuotes"}]}]}
+    shutil.copy2(pdf, dest / (new + ".part"))
+    os.replace(dest / (new + ".part"), dest / new)                 # PDF first, JSON last
+    tmp = dest / (Path(new).stem + ".json.tmp")
+    tmp.write_text(json.dumps(sc, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    os.replace(tmp, dest / (Path(new).stem + ".json"))
+    record_move(root, t, "SalesQuotes", side, pdf, on_hold, None, body.get("label"))
+    gone = root / "deleted" / t / datetime.now().strftime("%Y-%m")
+    gone.mkdir(parents=True, exist_ok=True)
+    for q2 in (pdf, Path(str(js) + ".attempts"), js):
+        if q2.is_file():
+            shutil.move(str(q2), str(free_name(gone, q2.name)))
+    (gone / (Path(name).stem + ".rerouted.json")).write_text(json.dumps(
+        {"to": f"out/SalesQuotes/{new}", "at": stamp, "by": "dashboard", "read_as": t}), encoding="utf-8")
+    return {"ok": True, "to": "SalesQuotes", "name": new, "read": bool(q)}
+
+
 def reroute_doc(cfg, root, t, body):
     """A document (ready or on hold) read as the wrong kind: the PDF goes to in/<dest>/ (with a _meta note) to be read again by that
     queue's reader; the held copy moves to deleted/<t>/<yyyy-mm>/ with a .rerouted.json note."""
     dest = str(body.get("dest") or "")
-    if dest == t or dest not in {r["type"] for r in route_targets(cfg)}:
+    if dest == t or dest not in {r["type"] for r in route_targets(cfg)} | ({"SalesQuotes"} & set(cfg["doc_types"])):
         raise ValueError("can't move it to that queue")
     on_hold = bool(body.get("held"))                     # 339: the ready queue too
     held = root / "out" / t / ("hold" if on_hold else "")
@@ -1551,6 +1646,8 @@ def reroute_doc(cfg, root, t, body):
         raise ValueError("the document's PDF is missing")
     if dest == "OtherDocuments":
         return move_to_od(cfg, root, t, name, js, side, pdf, on_hold, body)
+    if dest == "SalesQuotes":
+        return move_to_sq(cfg, root, t, name, js, side, pdf, on_hold, body)
     src = str(side.get("source_file") or pdf.name)
     indir, meta_dir = root / "in" / dest, root / "in" / dest / "_meta"
     indir.mkdir(parents=True, exist_ok=True)
@@ -1568,7 +1665,7 @@ def reroute_doc(cfg, root, t, body):
     (meta_dir / (name_in + ".json")).write_text(json.dumps(meta, indent=1), encoding="utf-8")   # the note before the PDF
     shutil.copy2(pdf, indir / (name_in + ".part"))                                             # the worker skips .part
     os.replace(indir / (name_in + ".part"), indir / name_in)
-    record_move(root, t, dest, side, pdf, on_hold)                  # 341: a label for the pre-sort
+    record_move(root, t, dest, side, pdf, on_hold, None, body.get("label"))   # 341: a label for the pre-sort
     gone = root / "deleted" / t / datetime.now().strftime("%Y-%m")
     gone.mkdir(parents=True, exist_ok=True)
     for q in (pdf, Path(str(js) + ".attempts"), js):
@@ -1585,7 +1682,8 @@ def do_action(cfg, body):
     a, t, name = body.get("action"), body.get("type"), str(body.get("name") or "")
     if a in ("edit", "check", "delete", "hold", "release", "reroute") and name and t in cfg.get("doc_types", {}):
         d = Path(cfg["root"]) / "out" / t
-        js = (d / "hold" / name) if (a in ("delete", "release") or (a not in ("hold",) and body.get("held"))) else (d / name)
+        on_hold = body.get("held", True) if a == "delete" else body.get("held")   # 464: delete from the ready queue too
+        js = (d / "hold" / name) if (a == "release" or (a not in ("hold",) and on_hold)) else (d / name)
         try:
             with sidecar_lock.locked(js, "dashboard", wait=15):
                 return _do_action(cfg, body)
@@ -1653,11 +1751,11 @@ def _do_action(cfg, body):
         return edit_doc(root, t, body)
 
     if a == "delete":
-        # held documents only: out of the pipeline into deleted/<Type>/<yyyy-mm>/ (recoverable); never synced
-        held = root / "out" / t / "hold"
+        # out of the pipeline into deleted/<Type>/<yyyy-mm>/ (recoverable); never synced. 464: ready queue too
+        held = root / "out" / t / ("hold" if body.get("held", True) else "")
         name = str(body.get("name") or "")
         if not name.endswith(".json") or not (held / name).is_file():
-            raise ValueError("only documents on hold can be deleted (Hold it first)")
+            raise ValueError("document not found (synced or moved already?)")
         js = safe_child(held, name)
         if Path(str(js) + ".uploaded").exists():
             raise ValueError("already uploaded to SharePoint: delete it there")
@@ -1669,7 +1767,8 @@ def _do_action(cfg, body):
             if q.is_file():
                 shutil.move(str(q), str(free_name(dest, q.name)))
         (dest / (Path(name).stem + ".deleted.json")).write_text(json.dumps({"name": name, "at": side["deleted_at"],
-                                                                         "source_file": side.get("source_file")}), encoding="utf-8")
+                                                                         "source_file": side.get("source_file"), "from": "hold" if body.get("held", True) else "queue",
+                                                                         **({"why": body["why"]} if body.get("why") else {})}), encoding="utf-8")
         return {"ok": True}
 
     if a == "reroute":
@@ -2216,7 +2315,7 @@ async function loadOut(){
   const types=outKey?outKey.split(","):[];
   try{for(const t of types){const sr=outSort[t+"|r"],sh=outSort[t+"|h"];
     const qs=(sr?`&sort=${encodeURIComponent(sr.k)}&dir=${sr.d}`:"")+(sh?`&hsort=${encodeURIComponent(sh.k)}&hdir=${sh.d}`:"")+(outCheck[t]?"&check="+encodeURIComponent(outCheck[t]):"");
-    const r=await fetch("/api/out?type="+encodeURIComponent(t)+qs);if(r.status==401)return location.reload();outData[t]=await r.json();if(outData[t].writers)WRITERS=outData[t].writers;if(outData[t].route_to)ROUTE=outData[t].route_to;if(outData[t].units)UNITS=outData[t].units}}
+    const r=await fetch("/api/out?type="+encodeURIComponent(t)+qs);if(r.status==401)return location.reload();outData[t]=await r.json();if(outData[t].writers)WRITERS=outData[t].writers;if(outData[t].route_to)ROUTE=outData[t].route_to;if(outData[t].route_types)RTYPES=outData[t].route_types;if(outData[t].units)UNITS=outData[t].units}}
   catch(e){}
   renderOut();clearTimeout(outTimer);outTimer=setTimeout(()=>{if(tab!="overview")loadOut()},10000)}
 const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_number",0,1],["Date","invoice_date"],["Total","total",1]],
@@ -2362,7 +2461,7 @@ function pvShow(t,x,held){if(!pvOn()||!x||!x.file)return;const k=t+"|"+(held?1:0
   $("#pvimg").src="/api/preview?"+q;const a=$("#pvpdf");a.href="/api/pdf?"+q;a.hidden=false}
 $("#pvtoggle").onclick=()=>pvSet(!pvOn());$("#pvclose").onclick=()=>pvSet(false);addEventListener("resize",pvTop);
 try{if(localStorage.getItem("mps.pv")=="1")pvSet(true)}catch(e){}
-let editing=null,ROUTE=[],WRITERS=[],UNITS=[["each","ea"],["kg","PKG"],["litre","/L"],["length","PLEN"],["metre","PM"],["lot","lot"]];
+let editing=null,ROUTE=[],RTYPES=[],WRITERS=[],UNITS=[["each","ea"],["kg","PKG"],["litre","/L"],["length","PLEN"],["metre","PM"],["lot","lot"]];
 const unitLabel=v=>{if(v==null||v===""||v=="null")return "";const u=UNITS.find(u=>u[0].toLowerCase()==String(v).toLowerCase());return u?u[1]:String(v)};
 function unitSelect(v){
   const vv=v==null||v=="null"?"":String(v),list=[...UNITS];if(vv&&!list.some(u=>u[0].toLowerCase()==vv.toLowerCase()))list.push([vv,vv]);
@@ -2455,13 +2554,19 @@ function spHtml(x,q){
   const sql=p.sql?`<div class="small muted" style="margin-top:6px">SQL: MPSDocs.dbo.${esc(p.sql.table)} + ${x.item_count} line${x.item_count==1?"":"s"} in ${esc(p.sql.lines_table)}</div>`
     :p.skip_sql?`<div class="small muted" style="margin-top:6px">Not recorded in SQL (no MPSDocs table for this type yet).</div>`:"";
   return `<div class="sec">SharePoint</div><div class="sp"><div class="path">${dest}</div>${cols}${ln}${sql}</div>`}
+function moveOpts(t){         // 464: by document type (labels.xlsx Types), grouped by where it goes
+  const lbl=d=>d=="OtherDocuments"?"Other Documents":d=="SalesQuotes"?"Sales Quotes":d=="delete"?"Delete":((ROUTE.find(r=>r.type==d)||{}).label||d);
+  const groups=[];RTYPES.forEach(r=>{if(r.dest==t)return;const g=r.dest=="OtherDocuments"||r.dest=="SalesQuotes"||r.dest=="delete"?lbl(r.dest):"Queues (read again)";
+    let G=groups.find(x=>x.g==g);if(!G)groups.push(G={g,o:[]});G.o.push(r)});
+  return groups.map(G=>`<optgroup label="${esc(G.g)}">${G.o.map(r=>`<option value="${esc(r.key)}">${esc(r.label)}${G.g=="Queues (read again)"?" → "+esc(lbl(r.dest)):""}</option>`).join("")}</optgroup>`).join("")}
 function docRows(t,list,held){
   const cols=COLS[DT[t]]||COLS.supplier_invoice;
   return list.map(x=>{const f=x.fields||{},id=t+"|"+(held?"h|":"r|")+x.name,open=outOpen.has(id);
     const pdf=x.pdf?`<a class="btn" target="_blank" rel="noopener" href="/api/preview?type=${encodeURIComponent(t)}&name=${encodeURIComponent(x.file)}${held?"&held=1":""}" onclick="event.stopPropagation()" title="First page as an image, in a new tab (the whole PDF: Whole PDF in the preview pane)">Image</a>`:"";
     const btn=`<button data-act="${held?"release":"hold"}" data-type="${esc(t)}" data-name="${esc(x.name)}">${held?"Release":"Hold"}</button>`
-      +(held?` <button class="danger" data-act="delete" data-type="${esc(t)}" data-name="${esc(x.name)}" title="Take it out of the pipeline (kept in pipeline/deleted for recovery)">Delete</button>`:"")
-      +(ROUTE.length?` <select class="route" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" onclick="event.stopPropagation()" title="Wrong kind of document? Send it to the right queue: that queue's reader reads it again"><option value="">Move to…</option>${ROUTE.filter(r=>r.type!=t).map(r=>`<option value="${esc(r.type)}">${esc(r.label)}</option>`).join("")}</select>`:"");
+      +` <button class="danger" data-act="delete" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" title="Take it out of the pipeline (kept in pipeline/deleted for recovery)">Delete</button>`
+      +(RTYPES.length?` <select class="route" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" onclick="event.stopPropagation()" title="Wrong kind of document? Choose what it is: it goes to that queue and is read again there (or to Other Documents / Sales Quotes)"><option value="">Move to…</option>${moveOpts(t)}</select>`
+       :ROUTE.length?` <select class="route" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" onclick="event.stopPropagation()" title="Wrong kind of document? Send it to the right queue: that queue's reader reads it again"><option value="">Move to…</option>${ROUTE.filter(r=>r.type!=t).map(r=>`<option value="${esc(r.type)}">${esc(r.label)}</option>`).join("")}</select>`:"");
     const fv=k=>k=="_folder"?x.source_folder:k=="_hold"?(HOLD[x.hold_reason]||x.hold_reason):f[k]??f[ALIAS[k]];
     const cell=(k,n,isId,kind)=>kind=="tick"?`<input type="checkbox" class="tick" title="Tick once you have checked this order against the PDF (fills Checked in SharePoint)" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" ${f.checked?"checked":""}>`
       :n?esc(money(fv(k))):typeof fv(k)=="boolean"?(fv(k)?"Yes":""):(fv(k)!=null&&fv(k)!=="")?esc(fv(k)):isId?`<span class="muted" title="no number read; file name shown">${esc((x.file||x.name).replace(/\.(pdf|json)$/i,""))}</span>`:"";
@@ -2564,8 +2669,8 @@ $("#outq").addEventListener("click",async e=>{
       editing=null;await loadOut();return}
   }
   if(b&&b.dataset.act=="delete"){e.stopPropagation();
-    if(!confirm("Delete "+b.dataset.name+" from the pipeline? It won't be synced. (Kept in pipeline/deleted, so it can be recovered.)"))return;
-    b.disabled=true;await act({action:"delete",type:b.dataset.type,name:b.dataset.name},"Deleted");loadOut();return}
+    if(!confirm("Delete "+b.dataset.name+(b.dataset.held=="1"?" (on hold)":" (ready to sync)")+" from the pipeline?\n\nIt won't be synced. It is kept in pipeline/deleted, so it can be recovered."))return;
+    b.disabled=true;await act({action:"delete",type:b.dataset.type,name:b.dataset.name,held:b.dataset.held=="1"},"Deleted");loadOut();return}
   if(b){e.stopPropagation();const a=b.dataset.act,t=b.dataset.type;
     if(a=="resetw"){delete COLW[t];saveColw();renderOut(true);return}
     if(a=="clearchk"){delete outCheck[t];loadOut();return}
@@ -2581,6 +2686,21 @@ $("#outq").addEventListener("change",async e=>{
   if(cf){const t=cf.dataset.type;cf.value?outCheck[t]=cf.value:delete outCheck[t];outScrollReset.add(t+"|r");outScrollReset.add(t+"|h");
     if(cf.value)outOpen.add("held|"+t);cf.blur();loadOut();return}
   const rs=e.target.closest("select.route");
+  if(rs&&rs.value.includes("|")){const r=RTYPES.find(x=>x.key==rs.value),nm=rs.dataset.name,held=rs.dataset.held=="1";   // 464: by type
+    const back=()=>{rs.value="";rs.blur()};if(!r)return back();
+    if(r.dest=="delete"){if(!confirm("Delete "+nm+" from the pipeline? ("+r.label+")\n\nIt won't be synced. It is kept in pipeline/deleted, so it can be recovered."))return back();
+      rs.disabled=true;await act({action:"delete",type:rs.dataset.type,name:nm,held,why:r.type},"Deleted");rs.blur();loadOut();return}
+    let cat=null,person=null;
+    if(r.dest=="OtherDocuments"){const cats=(ROUTE.find(x=>x.type=="OtherDocuments")||{}).categories||[];
+      if(r.category=="?"){cat=(prompt("Move "+nm+" to Other Documents.\nCategory (its folder in the library) - in use: "+cats.join(", "),cats[0]||"")||"").trim();if(!cat)return back()}
+      else if(String(r.category).startsWith("name:")){cat=r.category.slice(5);person=(prompt(r.label+": whose is it? (the document is named after the person, in Other Documents / "+cat+")","")||"").trim();if(!person)return back()}
+      else{cat=r.category;if(!confirm("Move "+nm+" to Other Documents / "+cat+" ("+r.label+")?"))return back()}
+      toast("Summarising it for Other Documents (up to a minute or so)…")}
+    else if(r.dest=="SalesQuotes"){if(!confirm("Move "+nm+" to Sales Quotes? It is read as a quote; this copy goes to pipeline/deleted."))return back();toast("Reading the quote (up to two minutes)…")}
+    else if(!confirm("Move "+nm+" to "+r.label+"? It is read again there; this copy goes to pipeline/deleted."))return back();
+    rs.disabled=true;await act({action:"reroute",type:rs.dataset.type,name:nm,held,dest:r.dest,category:cat,person,label:r.type},
+      r.dest=="OtherDocuments"?"Moved to Other Documents ("+cat+")":r.dest=="SalesQuotes"?"Moved to Sales Quotes":"Moved: it will be read again as "+r.label);
+    rs.blur();loadOut();return}
   if(rs){const to=rs.value;if(!to)return;const lbl=rs.options[rs.selectedIndex].text;
     let cat=null;
     if(to=="OtherDocuments"){const cats=(ROUTE.find(r=>r.type==to)||{}).categories||[];
