@@ -1528,6 +1528,8 @@ MOVE_TYPES = [
     ("mps_databook", "MPS databook", "OtherDocuments", "MPS Databook"),
     ("goods_returned_waybill", "Customer goods-returned waybill", "OtherDocuments", "Customer Goods Returned Waybill"),
     ("sars", "SARS document", "OtherDocuments", "SARS"),
+    ("credit_application", "Credit application (supplier's form we sign for 30-day credit)", "OtherDocuments", "Credit Applications"),  # 480
+    ("icft", "Ivor Crabbia Family Trust", "OtherDocuments", "Ivor Crabbia Family Trust"),
     ("ID_Document", "ID document", "OtherDocuments", "name:ID"),
     ("Drivers_Licence", "Driver's licence", "OtherDocuments", "name:Drivers Licence"),
     ("other", "Other (choose a category)", "OtherDocuments", "?"),
