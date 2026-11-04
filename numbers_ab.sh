@@ -82,6 +82,7 @@ for k in A B live; do
     if [ $k = live ]; then
         [ -n "$ACTIVE" ] && [ -d "$ACTIVE/lora" ] || continue
         mkdir -p $AB/live && ln -sfn $ACTIVE/lora $AB/live/lora; RUN=$AB/live
+        [ -f $ACTIVE/prompt.txt ] && cp $ACTIVE/prompt.txt $AB/live/   # 497: the live model reads with the prompt it learnt
     else
         [ "${OK[$k]}" = 1 ] || continue; RUN=$AB/$k
     fi
@@ -108,7 +109,8 @@ def side(k):
         if kind in res:
             q, pr = res[kind]["qty"]["acc"], res[kind]["price"]["acc"]
             d = (res[kind].get("description") or {}).get("acc")
-            out[kind] = {"line_qty": q, "line_price": pr, "line_description": d, "overall": round((q + pr) / 2, 4)}
+            out[kind] = {"line_qty": q, "line_price": pr, "line_description": d, "overall": round((q + pr) / 2, 4),
+                         "supplier": (res[kind].get("supplier") or {}).get("acc"), "date": (res[kind].get("date") or {}).get("acc")}
     out["secs_per_order"] = res.get("secs_per_order") or e.get("secs_per_order")
     ti = ab / k / "train_info.json"
     if ti.exists():
@@ -120,11 +122,13 @@ r = {"id": ab.name, "kind": "numbers-ab", "at": datetime.now().isoformat(timespe
 pc = lambda v: "-" if v is None else f"{v * 100:.1f} %"
 lines = []
 for k in ("live", "A", "B"):
-    s = r[k].get("combined") or r[k].get("numbers")
-    lines.append(f"{k}: " + ("failed" if not s else f"qty {pc(s['line_qty'])}, price {pc(s['line_price'])}, description {pc(s.get('line_description'))}"))
+    s, nm = r[k].get("combined") or r[k].get("numbers"), r[k].get("numbers") or {}
+    lines.append(f"{k}: " + ("failed" if not s else f"qty {pc(s['line_qty'])}, price {pc(s['line_price'])}, description {pc(s.get('line_description'))}, "
+                             f"supplier {pc(nm.get('supplier'))}, date {pc(nm.get('date'))}"))
 reader = (r["live"].get("main") or r["A"].get("main") or {})
 r["reader"] = reader
-r["why"] = "scored only, not installed (Dino picks): " + " | ".join(lines) + (f" | reader alone: qty {pc(reader.get('line_qty'))}, price {pc(reader.get('line_price'))}" if reader else "")
+r["why"] = "scored only, not installed (Dino picks): " + " | ".join(lines) + (
+    f" | reader alone: qty {pc(reader.get('line_qty'))}, price {pc(reader.get('line_price'))}, supplier {pc(reader.get('supplier'))}, date {pc(reader.get('date'))}" if reader else "")
 json.dump(r, open(rep_p, "w"), indent=1)
 print("report:", rep_p, "|", r["why"])
 PY

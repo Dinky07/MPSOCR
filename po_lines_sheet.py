@@ -91,6 +91,27 @@ def unit(u):
     return UNIT.get(u, u) or None
 
 
+def date_final(read, sheet):
+    """(FINAL date, verified, why) for the order date: the sheet's where the two agree or differ the way a misreading does
+    (only the year: 2005 for 2025; or a day / month digit 1, 4 or 7 for another of them - her 4 is an L with a flick,
+    her 1 a plain stroke); otherwise the reading stays and the date is unverified (the sheet may carry another date,
+    e.g. the day it was entered)."""
+    r, s = str(read or "")[:10], str(sheet or "")[:10]
+    if not s:
+        return r or None, False, "no date on the sheet"
+    if not r:
+        return s, True, "date not read"
+    if r == s:
+        return s, True, ""
+    if r[5:] == s[5:]:
+        return s, True, "year misread"
+    a, b = r[8:10] + r[5:7], s[8:10] + s[5:7]
+    diff = [(x, y) for x, y in zip(a, b) if x != y]
+    if r[:4] in (s[:4], s[:2] + "0" + s[3]) and len(diff) == 1 and set(diff[0]) <= set("147"):
+        return s, True, "day / month digit misread"
+    return r, False, f"sheet says {s}"
+
+
 def pair_score(x, y):
     s = sim(x.get("description"), y.get("description"))
     q = num(x.get("quantity")), num(y.get("quantity"))
@@ -298,6 +319,8 @@ def main():
             rel = str(pdf.relative_to(root)).replace("/", "\\")
             pairs = align(ri, gi)
             o_lines, o_ok = [], True
+            d_final, d_ok, d_why = date_final(rd.get("date"), reg.get("date"))
+            cnt["order date " + ("verified" if d_ok else "unverified")] += 1
             for k, (x, y) in enumerate(pairs, 1):
                 st, what, note, fq, fp, fd, s = judge(x, y, len(ri) == len(gi))
                 use = "Y" if st in ("match", "corrected") else ""
@@ -311,7 +334,9 @@ def main():
                        "desc_read": x.get("description"), "desc_sheet": y.get("description"), "desc_final": fd, "desc_alike": s,
                        "desc_ok": "Y" if (s is not None and s >= 0.8) else "",
                        "where": where, "book": f"{reg.get('book')} / {reg.get('tab')} row {reg.get('row')}", "pdf": rel,
-                       "hash": h, "corrected_before": bool(sc.get("fields_read")), "checked_how": sc.get("checked_how") or ""}
+                       "hash": h, "corrected_before": bool(sc.get("fields_read")), "checked_how": sc.get("checked_how") or "",
+                       "supplier_read": sup, "date_read": rd.get("date"), "date_final": d_final, "date_ok": "Y" if d_ok else "",
+                       "date_why": d_why}
                 rows.append(row)
                 o_lines.append(row)
                 cnt["line: " + st] += 1
@@ -342,6 +367,8 @@ def main():
     for o in orders:
         rs = o.pop("_rows")
         o["all_lines_usable"] = all(r["use"] == "Y" for r in rs)
+        o.update(supplier_read=rs[0]["supplier_read"], date_read=rs[0]["date_read"], date_final=rs[0]["date_final"],
+                 date_verified=rs[0]["date_ok"] == "Y")
         o["lines"] = [{"description": r["desc_final"], "quantity": r["qty_final"], "unit_price": r["price_final"],
                        "price_unit": unit(r["per_sheet"] if r["per_sheet"] not in (None, "total") else r["per_read"]),
                        "description_verified": r["desc_ok"] == "Y", "use": r["use"] == "Y", "status": r["status"]} for r in rs]
@@ -365,7 +392,8 @@ def main():
             ("Description read", "desc_read", 40), ("Description sheet", "desc_sheet", 40), ("Description FINAL", "desc_final", 40),
             ("Alike", "desc_alike", 6), ("Description verified", "desc_ok", 9), ("Lines read", "lines_read", 6), ("Lines sheet", "lines_sheet", 6), ("Where", "where", 7),
             ("Spreadsheet", "book", 34), ("Already corrected", "corrected_before", 9), ("Ref", "pdf", 50), ("Hash", "hash", 12),
-            ("Changed by you", "edited", 8)] + AUTO_COLS
+            ("Changed by you", "edited", 8), ("Supplier read", "supplier_read", 22), ("Date read", "date_read", 11),
+            ("Date FINAL", "date_final", 11), ("Date verified", "date_ok", 8), ("Date note", "date_why", 24)] + AUTO_COLS
     ws.append([c[0] for c in cols])
     bold = Font(bold=True)
     fill = {"corrected": PatternFill("solid", fgColor="E8F4E8"), "check": PatternFill("solid", fgColor="FFF2CC"),
@@ -419,6 +447,8 @@ def main():
         "The sheet is rebuilt every evening (20:15, and Saturday 16:30 before training) with every order read since: new orders are added and",
         "your changes to Use, the FINAL columns and Description verified are kept ('Changed by you' = Y). Save and close it before 20:15.",
         "A change is not kept when that line's reading or spreadsheet values have changed since: its Notes say so.",
+        "Supplier (the sheet's name) and Date FINAL are the order's, on each of its lines; training learns them too (Dino 4 Nov). Date FINAL is the sheet's",
+        "where the reading agrees or was misread (the year, or a 1 / 4 / 7 in the day or month); otherwise the reading stays and Date verified is blank.",
     ]:
         s3.append([line])
     s3.column_dimensions["A"].width = 140

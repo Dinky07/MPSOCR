@@ -30,6 +30,23 @@ def num(v):
         return None
 
 
+# Dino 4 Nov: the supplier and the order date are learnt too (the reader has the supplier right on 91 % of orders, the
+# date on 68 %), alongside the lines
+PROMPT = ND.PROMPT.replace(
+    "Read ONLY the order lines (the table of items).",
+    "Read the supplier (the name written on the M line at the top left), the order date (DATE: at the top right, written "
+    "day.month.year) and the order lines (the table of items).").replace(
+    'Answer with JSON only: {"lines":',
+    'Answer with JSON only: {"supplier": text or null, "date": "YYYY-MM-DD" or null, "lines":')
+assert PROMPT != ND.PROMPT and PROMPT.count('"supplier"') == 1 and "order date" in PROMPT, "numbers prompt changed: header not added"
+
+
+def answer(e):
+    a = json.loads(ND.answer(e["items"]))
+    h = e.get("header") or {}
+    return json.dumps({"supplier": h.get("supplier"), "date": h.get("date"), "lines": a["lines"]}, ensure_ascii=False)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="/srv/ml/numbers/data-sheet")
@@ -65,12 +82,16 @@ def main():
                  for r in rs]
         main = [{"qty": num(r[I["Qty read"]]), "unit_price": num(r[I["Price read"]]), "description": r[I["Description read"]]}
                 for r in rs if r[I["Status"]] != "sheet only"]
-        e = {"hash": h, "pdf": str(ROOT / str(rs[0][I["Ref"]]).replace("\\", "/")), "items": items, "main": main,
-             "desc_ok": [yes(r[I["Description verified"]]) for r in rs]}
+        r0 = rs[0]
+        hdr = {"supplier": r0[I["Supplier"]], "date": str(r0[I["Date FINAL"]] or "")[:10] or None} if "Date FINAL" in I else None
+        e = {"hash": h, "pdf": str(ROOT / str(r0[I["Ref"]]).replace("\\", "/")), "items": items, "main": main,
+             "desc_ok": [yes(r[I["Description verified"]]) for r in rs], "header": hdr,
+             "header_read": {"supplier": r0[I["Supplier read"]], "date": str(r0[I["Date read"]] or "")[:10] or None} if hdr else None,
+             "date_ok": yes(r0[I["Date verified"]]) if hdr else False}
         (tests if T.is_test(h) else train).append(e)
     tests = sorted(tests, key=lambda e: e["hash"])[: a.test_max or None]          # 0 = every test order (Dino 4 Nov)
     print(f"{len(orders)} orders in the sheet: {len(train)} train, {len(tests)} test, {skipped} not all lines Use = Y", flush=True)
-    (out / "prompt.txt").write_text(ND.PROMPT, encoding="utf-8")
+    (out / "prompt.txt").write_text(PROMPT, encoding="utf-8")
     for name, rows in (("train", train), ("test", tests)):
         n = made = 0
         with open(out / f"{name}.jsonl.tmp", "w", encoding="utf-8") as fh:
@@ -87,12 +108,14 @@ def main():
                         except Exception as ex:
                             print(f"  {Path(e['pdf']).name}: not rendered ({ex})", flush=True)
                             continue
-                rec = {"image": str(img.relative_to(out)), "prompt": ND.PROMPT, "answer": ND.answer(e["items"]), "hash": e["hash"],
+                rec = {"image": str(img.relative_to(out)), "prompt": PROMPT, "answer": answer(e), "hash": e["hash"],
                        "file": Path(e["pdf"]).name}
                 if name == "test":
                     rec["verified"] = [{"qty": i["quantity"], "unit_price": i["unit_price"], "description": i["description"]} for i in e["items"]]
                     rec["main"] = e["main"]
                     rec["description_verified"] = e["desc_ok"]
+                    rec["verified_header"] = dict(e["header"] or {}, date_verified=e["date_ok"])
+                    rec["main_header"] = e["header_read"]
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 n += 1
         (out / f"{name}.jsonl.tmp").replace(out / f"{name}.jsonl")
