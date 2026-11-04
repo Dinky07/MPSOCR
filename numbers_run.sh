@@ -46,6 +46,12 @@ unload() {
 say "numbers pass $RUNID$([ $WEEKEND = 1 ] && echo " (weekend: deadline $(date -d @$DEADLINE '+%a %F %H:%M'))")"
 ACTIVE=$(readlink -f $D/active 2>/dev/null || true)
 say "live model: ${ACTIVE:-none}"
+# 469 (Dino 4 Nov): a requested A/B (training/numbers_ab_request: Qwen2.5-VL vs Qwen3-VL on the corrected training
+# sheet) runs in place of this pass; the request is used up
+if [ -e "$ROOT/training/numbers_ab_request" ]; then
+    rm -f "$ROOT/training/numbers_ab_request"; say "A/B requested: numbers_ab.sh runs instead of this pass"
+    exec /bin/bash $P/numbers_ab.sh
+fi
 # 1. ad hoc: wait for the training queue and any other GPU job (in the queue that has already been done)
 if [ "${IN_QUEUE:-0}" != 1 ]; then
     while systemctl is-active --quiet mps-ocr-training.service || pgrep -f "training\.py (quick|finetune)" >/dev/null; do sleep 60; done
