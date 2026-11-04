@@ -35,7 +35,7 @@ try:
 except Exception:                         # pragma: no cover
     ws_reader = None
 
-VERSION = "presort-7 (3 Nov study: sideways scans re-read upright, tax invoices below the title, workshop sheet forms, Saheti)"
+VERSION = "presort-8 (4 Nov: credit applications, Ivor Crabbia Family Trust)"
 KINDS = {
     "purchase_order": "PurchaseOrders", "polymer_order": "PurchaseOrders", "pro_forma": "PurchaseOrders",
     "quotation": "PurchaseOrders", "statement": "PurchaseOrders", "credit_note": "PurchaseOrders",
@@ -47,7 +47,8 @@ KINDS = {
 # presort-6: kinds that belong in Other Documents (category = Dino's folder); no queue, so the worker never routes them
 OD_CATEGORY = {"id_document": "ID", "drivers_licence": "Drivers Licence", "vehicle_handover": "Vehicle Handover",
                "vehicle_registration": "Vehicle RC1", "collection_slip": "Collection Slips", "saheti": "Saheti",
-               "letter": "Letter", "medical": "Medical"}
+               "letter": "Letter", "medical": "Medical",
+               "credit_application": "Credit Applications", "icft": "Ivor Crabbia Family Trust"}
 SQ_KINDS = {"sales_quotation"}                             # 471b: to Sales Quotes (read there as a quote)
 COMMON = re.compile(r"\b(THE|AND|FOR|DATE|TOTAL|VAT|TEL|PAGE|INVOICE|ORDER|NUMBER|QTY|DESCRIPTION|AMOUNT|PRICE|NAME|ADDRESS|SIGNATURE|PTY|LTD)\b")
 
@@ -250,7 +251,13 @@ def verdict(pdf, name=None, folder=None, texts=None):
 
     # 471b: a doctor's statement / invoice is medical, an OEM letter is a letter, our own quote is a sales quote,
     # whatever its title says
-    if any(k in ("medical", "letter", "sales_quotation") for k, _, _ in votes):
+    # presort-8: a supplier's credit application we sign (title), the Ivor Crabbia Family Trust's papers
+    if has(r"\bCREDIT APPLICATION\b|\bAPP?LICATION FOR (A |AN )?(CREDIT|ACCOUNT)\b|\bAPP?LICATION FOR DEFERRED PAYMENT\b"
+           r"|\bCUSTOMER APPLICATION FOR (AN )?ACCOUNT\b|\bACCOUNT APPLICATION\b|\bCREDIT FACILIT(Y|IES) APPLICATION\b", T):
+        votes.append(("credit_application", "likely", "title: credit / account application"))
+    if (has(r"\bIVOR CRABBIA FAMILY TRUST\b", T) or has(r"\bIT ?2462 ?/ ?(20)?09\b")) and not has(r"\bIVOR AND ANDRIANE\b"):
+        votes.append(("icft", "likely", "Ivor Crabbia Family Trust (IT 2462/2009)"))
+    if any(k in ("medical", "letter", "sales_quotation", "credit_application", "icft") for k, _, _ in votes):
         votes = [x for x in votes if x[0] not in ("statement", "supplier_invoice", "quotation", "credit_note", "purchase_order", "polymer_order")]
     kinds = list(dict.fromkeys(k for k, _, _ in votes))
     if not kinds:
