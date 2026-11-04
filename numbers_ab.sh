@@ -14,8 +14,8 @@ STAMP=$(date +%Y%m%d-%H%M); AB=$D/ab-$STAMP
 QA=${QA:-unsloth/Qwen2.5-VL-3B-Instruct-bnb-4bit}
 QB=${QB:-unsloth/Qwen3-VL-4B-Instruct-unsloth-bnb-4bit}
 EPOCHS=${EPOCHS:-2}
-TEST_MAX=${TEST_MAX:-600}
-EVAL_EACH=${EVAL_EACH:-5400}         # seconds kept per scoring (600 orders at ~8 s)
+TEST_MAX=${TEST_MAX:-0}              # 0 = every usable test order (Dino 4 Nov: ~1,100, scores to about +-0.9 point)
+EVAL_EACH=${EVAL_EACH:-10800}        # seconds kept per scoring (~1,100 orders at ~8 s, Qwen3 slower)
 export HF_HOME=/srv/ocr/hf-cache PYTHONUNBUFFERED=1
 if [ "$(date +%u)" -ge 6 ]; then DEADLINE=$(date -d "next monday 02:30" +%s); else DEADLINE=${DEADLINE:-$(date -d "+30 hours" +%s)}; fi
 mkdir -p $AB; [ "$(id -u)" = 0 ] && chown -R dinoc:dinoc $D

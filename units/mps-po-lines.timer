@@ -1,0 +1,9 @@
+[Unit]
+Description=MPS PO lines training sheet: every evening after the 19:30 import, and Saturday before the 17:00 training
+[Timer]
+OnCalendar=*-*-* 20:15:00
+OnCalendar=Sat *-*-* 16:30:00
+Persistent=true
+Unit=mps-po-lines.service
+[Install]
+WantedBy=timers.target

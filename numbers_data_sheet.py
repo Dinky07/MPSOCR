@@ -6,7 +6,7 @@ Same split as training.py (1 in 5 by content hash is a TEST order, never trained
 the test orders either. Test rows carry "verified" (FINAL) and "main" (what the reader read, from the sheet) - no
 Ollama reads. Page images are reused from the old dataset (same name: hash[:16].png) or rendered at 1600 px.
 
-    python3 numbers_data_sheet.py --out /srv/ml/numbers/data-sheet [--test-max 600] [--sheet FILE]
+    python3 numbers_data_sheet.py --out /srv/ml/numbers/data-sheet [--test-max N, 0 = all] [--sheet FILE]
 """
 import argparse, glob, json, os, sys
 from collections import defaultdict
@@ -36,10 +36,12 @@ def main():
     ap.add_argument("--sheet", default=None)
     ap.add_argument("--old-img", default="/srv/ml/numbers/data/img")
     ap.add_argument("--px", type=int, default=1600)
-    ap.add_argument("--test-max", type=int, default=600)
+    ap.add_argument("--test-max", type=int, default=0, help="0 = every test order")
     a = ap.parse_args()
     import openpyxl
-    sheet = Path(a.sheet) if a.sheet else max(Path(p) for p in glob.glob(str(ROOT / "training" / "po_lines" / "PO lines training *.xlsx")))
+    stable = ROOT / "training" / "po_lines" / "PO lines training.xlsx"          # rebuilt nightly with Dino's changes kept
+    sheet = Path(a.sheet) if a.sheet else stable if stable.exists() else \
+        max(Path(p) for p in glob.glob(str(ROOT / "training" / "po_lines" / "PO lines training *.xlsx")))
     print("sheet:", sheet, flush=True)
     ws = openpyxl.load_workbook(sheet, read_only=True, data_only=True)["Lines"]
     it = ws.iter_rows(values_only=True)
@@ -66,7 +68,7 @@ def main():
         e = {"hash": h, "pdf": str(ROOT / str(rs[0][I["Ref"]]).replace("\\", "/")), "items": items, "main": main,
              "desc_ok": [yes(r[I["Description verified"]]) for r in rs]}
         (tests if T.is_test(h) else train).append(e)
-    tests = sorted(tests, key=lambda e: e["hash"])[: a.test_max]
+    tests = sorted(tests, key=lambda e: e["hash"])[: a.test_max or None]          # 0 = every test order (Dino 4 Nov)
     print(f"{len(orders)} orders in the sheet: {len(train)} train, {len(tests)} test, {skipped} not all lines Use = Y", flush=True)
     (out / "prompt.txt").write_text(ND.PROMPT, encoding="utf-8")
     for name, rows in (("train", train), ("test", tests)):

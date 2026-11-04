@@ -186,6 +186,64 @@ def judge(x, y, equal_counts):
     return st, ", ".join(diffs), "; ".join(notes), fq, fp, fd, round(s, 2)
 
 
+STABLE = "PO lines training.xlsx"
+AUTO_COLS = [("Auto Use", "auto_use", 4), ("Auto qty", "auto_qty", 4), ("Auto price", "auto_price", 4),
+             ("Auto description", "auto_desc", 4), ("Auto description verified", "auto_desc_ok", 4)]
+
+
+def yn(v):
+    s = str(v or "").strip().upper()
+    return "Y" if s in ("Y", "YES", "X", "1", "TRUE", "OK") else "N" if s.startswith("N") else ""
+
+
+def txt(v):
+    return str(v).strip() if v not in (None, "") else None
+
+
+def load_edits(p, out):
+    """(hash, line) -> the visible values Dino set, where they differ from what the builder wrote (the hidden Auto columns;
+    for the first sheet of 4 Nov, which has none, the builder's JSON of that day)."""
+    import openpyxl
+    try:
+        ws = openpyxl.load_workbook(p, read_only=True, data_only=True)["Lines"]
+    except Exception as e:
+        print(f"  {p.name}: not read ({e})", flush=True)
+        return {}
+    it = ws.iter_rows(values_only=True)
+    head = list(next(it, []))
+    I = {k: i for i, k in enumerate(head) if k}
+    if "Hash" not in I:
+        return {}
+    auto_json = None
+    if "Auto Use" not in I:
+        m = re.search(r"(\d{4}-\d\d-\d\d)", p.name)
+        jp = out / f"po_lines_{m.group(1)}.json" if m else None
+        if not jp or not jp.exists():
+            return {}
+        auto_json = {}
+        for o in json.load(open(jp, encoding="utf-8"))["orders"]:
+            for k, l in enumerate(o["lines"], 1):
+                auto_json[(str(o["hash"]), k)] = ("Y" if l["use"] else "", num(l["quantity"]), num(l["unit_price"]),
+                                                  txt(l["description"]), "Y" if l["description_verified"] else "")
+    edits = {}
+    for r in it:
+        if not r or not r[I["Hash"]]:
+            continue
+        key = (str(r[I["Hash"]]), int(r[I["Line"]] or 0))
+        vis = (yn(r[I["Use"]]), num(r[I["Qty FINAL"]]), num(r[I["Price FINAL"]]), txt(r[I["Description FINAL"]]), yn(r[I["Description verified"]]))
+        if auto_json is None:
+            auto = (yn(r[I["Auto Use"]]), num(r[I["Auto qty"]]), num(r[I["Auto price"]]), txt(r[I["Auto description"]]),
+                    yn(r[I["Auto description verified"]]))
+        else:
+            auto = auto_json.get(key)
+            if auto is None:
+                continue
+        if vis != auto:
+            edits[key] = {"vis": vis, "check": (num(r[I["Qty read"]]), num(r[I["Price read"]]), num(r[I["Qty sheet"]]), num(r[I["Price sheet"]]))}
+    print(f"  {p.name}: {len(edits)} lines changed by Dino", flush=True)
+    return edits
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="/srv/ocr/scans/pipeline")
@@ -258,12 +316,36 @@ def main():
                 o_lines.append(row)
                 cnt["line: " + st] += 1
             orders.append({"order": on, "hash": h, "pdf": rel, "sidecar": str(Path(js).relative_to(root)).replace("\\", "/"),
-                           "all_lines_usable": o_ok, "supplier": reg.get("supplier"), "date": reg.get("date"),
-                           "lines": [{"description": r["desc_final"], "quantity": r["qty_final"], "unit_price": r["price_final"],
-                                      "price_unit": unit(r["per_sheet"] if r["per_sheet"] not in (None, "total") else r["per_read"]),
-                                      "description_verified": r["desc_ok"] == "Y", "use": r["use"] == "Y", "status": r["status"]}
-                                     for r in o_lines]})
-            cnt["orders all lines usable"] += o_ok
+                           "supplier": reg.get("supplier"), "date": reg.get("date"), "_rows": o_lines})
+    # Dino's changes in the sheet (Use, FINAL, Description verified) are carried into the new one, line by line
+    edits = {}
+    for p in sorted(list(out.glob("PO lines training*.xlsx")), key=lambda p: p.stat().st_mtime):
+        if not p.name.startswith("~$"):
+            edits.update(load_edits(p, out))
+    applied = stale = 0
+    for r in rows:
+        r.update(auto_use=r["use"], auto_qty=r["qty_final"], auto_price=r["price_final"], auto_desc=r["desc_final"],
+                 auto_desc_ok=r["desc_ok"], edited="")
+        e = edits.get((str(r["hash"]), r["line"]))
+        if not e:
+            continue
+        if e["check"] != (r["qty_read"], r["price_read"], r["qty_sheet"], r["price_sheet"]):
+            stale += 1
+            r["notes"] = (r["notes"] + "; " if r["notes"] else "") + "your earlier change not carried over: the reading or the sheet changed"
+            continue
+        r["use"], r["qty_final"], r["price_final"], r["desc_final"], r["desc_ok"] = e["vis"]
+        r["edited"] = "Y"
+        applied += 1
+    if applied or stale:
+        cnt["lines changed by Dino, carried over"] = applied
+        cnt["lines changed by Dino, not carried (reading changed)"] = stale
+    for o in orders:
+        rs = o.pop("_rows")
+        o["all_lines_usable"] = all(r["use"] == "Y" for r in rs)
+        o["lines"] = [{"description": r["desc_final"], "quantity": r["qty_final"], "unit_price": r["price_final"],
+                       "price_unit": unit(r["per_sheet"] if r["per_sheet"] not in (None, "total") else r["per_read"]),
+                       "description_verified": r["desc_ok"] == "Y", "use": r["use"] == "Y", "status": r["status"]} for r in rs]
+        cnt["orders all lines usable"] += o["all_lines_usable"]
     stamp = datetime.now().strftime("%Y-%m-%d")
     jp = out / f"po_lines_{stamp}.json"
     jp.write_text(json.dumps({"made": datetime.now().isoformat(timespec="seconds"), "counts": cnt, "orders": orders},
@@ -282,7 +364,8 @@ def main():
             ("Per read", "per_read", 8), ("Per sheet", "per_sheet", 8),
             ("Description read", "desc_read", 40), ("Description sheet", "desc_sheet", 40), ("Description FINAL", "desc_final", 40),
             ("Alike", "desc_alike", 6), ("Description verified", "desc_ok", 9), ("Lines read", "lines_read", 6), ("Lines sheet", "lines_sheet", 6), ("Where", "where", 7),
-            ("Spreadsheet", "book", 34), ("Already corrected", "corrected_before", 9), ("Ref", "pdf", 50), ("Hash", "hash", 12)]
+            ("Spreadsheet", "book", 34), ("Already corrected", "corrected_before", 9), ("Ref", "pdf", 50), ("Hash", "hash", 12),
+            ("Changed by you", "edited", 8)] + AUTO_COLS
     ws.append([c[0] for c in cols])
     bold = Font(bold=True)
     fill = {"corrected": PatternFill("solid", fgColor="E8F4E8"), "check": PatternFill("solid", fgColor="FFF2CC"),
@@ -307,8 +390,10 @@ def main():
             ws.cell(rr, 2).fill = fill[r["status"]]
         for ci in (12, 15, 20):
             ws.cell(rr, ci).fill = final
-    for i, (_, _, w) in enumerate(cols, 1):
+    for i, (name, _, w) in enumerate(cols, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+        if name.startswith("Auto "):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(i)].hidden = True    # what the builder set: spots your changes
     ws.freeze_panes = "F2"
     ws.auto_filter.ref = ws.dimensions
     dv = DataValidation(type="list", formula1='"Y,N"', allow_blank=True)
@@ -331,11 +416,16 @@ def main():
         "read only / sheet only: a line on one side only (the reader read an extra line, or missed one). unverified: the sheet's line has no qty or price (a note row).",
         "Not used unless you set Use = Y. Orders whose spreadsheet row names another supplier are left out (probably the wrong row).",
         "PDF opens the order (O:\\pipeline). Sorted: check first, then corrected, then lines on one side only, then matches.",
+        "The sheet is rebuilt every evening (20:15, and Saturday 16:30 before training) with every order read since: new orders are added and",
+        "your changes to Use, the FINAL columns and Description verified are kept ('Changed by you' = Y). Save and close it before 20:15.",
+        "A change is not kept when that line's reading or spreadsheet values have changed since: its Notes say so.",
     ]:
         s3.append([line])
     s3.column_dimensions["A"].width = 140
-    xp = out / f"PO lines training {stamp}.xlsx"
-    wb.save(xp)
+    xp = out / STABLE
+    tmp = out / (".~" + STABLE)
+    wb.save(tmp)
+    os.replace(tmp, xp)                                  # never a half-written sheet; an open copy in Excel keeps its own
     print(json.dumps(cnt, indent=1))
     print("sheet:", xp)
     print("json:", jp)
