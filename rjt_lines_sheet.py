@@ -86,6 +86,11 @@ def judge(x, y):
     cr, cc = norm_code(x.get("item_no")), y["code"]
     qr, qc = num(x.get("quantity")), y["qty"]
     diffs, notes = [], []
+    if len(re.sub(r"\D", "", cr)) < 7 or len(cr) < 9:
+        # the Item No. column holds "SPF", "RONIN", "11", "200N3" or nothing (the May-July 2026 forms): the capturer built the
+        # code from the description, so only the quantity can be checked against the page
+        st = "no code written" if qr == qc else "check"
+        return st, "code" + (", qty" if qr != qc else ""), f"Item No. column reads '{x.get('item_no') or ''}': the code comes from the description", cc, qc
     if cr != cc:
         diffs.append("code")
     if qr != qc:
@@ -190,11 +195,12 @@ def main():
             ("Lines read", "lines_read", 6), ("Lines captured", "lines_captured", 6), ("Where", "where", 7), ("Sage state", "doc_state", 6), ("Ref", "pdf", 50), ("Hash", "hash", 12)]
     ws.append([c[0] for c in cols])
     fill = {"corrected": PatternFill("solid", fgColor="E8F4E8"), "check": PatternFill("solid", fgColor="FFF2CC"),
-            "read only": PatternFill("solid", fgColor="EEEEEE"), "sheet only": PatternFill("solid", fgColor="EEEEEE")}
+            "read only": PatternFill("solid", fgColor="EEEEEE"), "sheet only": PatternFill("solid", fgColor="EEEEEE"),
+            "no code written": PatternFill("solid", fgColor="E4DFEC")}
     final = PatternFill("solid", fgColor="DDEBF7")
     for c in ws[1]:
         c.font = Font(bold=True); c.alignment = Alignment(wrap_text=True, vertical="top")
-    rank = {"check": 0, "corrected": 1, "sheet only": 2, "read only": 3, "match": 4}
+    rank = {"check": 0, "corrected": 1, "sheet only": 2, "read only": 3, "no code written": 4, "match": 5}
     rows.sort(key=lambda r: (rank[r["status"]], r["jt"], r["line"]))
     for r in rows:
         ws.append([("PDF" if k is None else r[k]) for _, k, _ in cols])
@@ -215,7 +221,8 @@ def main():
     s3 = wb.create_sheet("How")
     for line in ["One row per JT line: the stock code and quantity the reader read, what was captured in RoninStock for that DF number, and FINAL (blue).",
                  "FINAL = the captured values. Use = Y goes into training. corrected = differs the way a misreading does (O/0, S/5, I/1 and the like); check = differs more: set Y or N.",
-                 "read only / sheet only: a line on one side only. The description stays as read (Sage's is the stock item's name, not what is written)."]:
+                 "read only / sheet only: a line on one side only. The description stays as read (Sage's is the stock item's name, not what is written).",
+                 "no code written: the Item No. column holds no stock code (SPF, RONIN, a size), so the captured code was built from the description; the quantity agrees. Use = Y teaches the reader to build the code the same way."]:
         s3.append([line])
     s3.column_dimensions["A"].width = 140
     xp = out / "Ronin JT lines training.xlsx"; tmp = out / (".~" + xp.name)
