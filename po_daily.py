@@ -331,6 +331,12 @@ def autocheck():
     """408 (Dino 2 Nov): the day's clear orders are checked as soon as the batch is read, not only at 19:30 (queue, then
     hold; same rules - an order with no spreadsheet row waits 7 days for it)."""
     import subprocess
+    try:                                                 # 498: own order forms read as "not an order", first
+        r = subprocess.run([sys.executable, str(Path(__file__).resolve().with_name("ownform_fix.py")), "--queue", "--apply"],
+                           capture_output=True, text=True, timeout=1800)
+        print(f"ownform_fix: rc={r.returncode} {(r.stdout.strip().splitlines() or [''])[0][:200]}", flush=True)
+    except Exception as ex:
+        print(f"ownform_fix: {ex}", flush=True)
     for args in (["--apply"], ["--hold", "--apply"]):
         try:
             r = subprocess.run([sys.executable, str(Path(__file__).resolve().with_name("po_autocheck.py"))] + args,

@@ -16,7 +16,7 @@ DRY RUN unless --apply. -> reports/ownform fix <stamp>[ dry run].csv
 (out/<type>/*.json): there only the form changes, nothing is put on hold.
     python3 ownform_fix.py [--apply] [--queue]
 """
-import argparse, csv, glob, json, os, re, sys
+import argparse, csv, difflib, glob, json, os, re, sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -41,6 +41,33 @@ def digits(s):
 def title(text, n=10):
     lines = [l.strip() for l in (text or "").splitlines() if len(l.strip()) > 2]
     return re.sub(r"\s+", " ", " ".join(lines[:n])).upper()
+
+
+def form_changed(sc):
+    """Somebody (dashboard, checking file, a fix) already changed the form: leave it alone."""
+    return any(c.get("field") == "form" for e in sc.get("edits") or [] for c in e.get("changes") or [])
+
+
+_REGS = {}
+
+
+def sheet_says(sc, on):
+    """5 Nov: the reader answered doc_type purchase_order but form not_an_order (2017 scans with the letterhead cut off,
+    struck-through forms); the buying spreadsheet has the order under this number for this supplier -> an MPS order."""
+    f, fr = sc.get("fields") or {}, sc.get("fields_read") or {}
+    if f.get("form") != "not_an_order" or not re.fullmatch(r"A\d{5}", on):
+        return None
+    if "purchase_order" not in (f.get("po_doc_type"), fr.get("po_doc_type")):
+        return None
+    if not _REGS:
+        _REGS.update(json.load(open(ROOT / "work" / "po_daily" / "registers.json", encoding="utf-8")))
+    norm = lambda v: re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
+    for r in _REGS.get(on) or []:
+        for s in (f.get("supplier"), fr.get("supplier")):
+            x, y = norm(s), norm(r.get("supplier"))
+            if x and y and (x in y or y in x or difflib.SequenceMatcher(None, x, y).ratio() >= 0.7):
+                return "mps_order", on, f"reader says purchase order; the buying spreadsheet has {on} for {r.get('supplier')}"
+    return None
 
 
 def judge(sc, text, text2=""):
@@ -139,7 +166,9 @@ def main():
                 continue
             f = sc.get("fields") or {}
             named = any(n and js.name.startswith(n) for n in a.names.split(","))
-            if sc.get("doc_type") != "po" or (f.get("checked") and not named) or Path(str(js) + ".uploaded").exists():
+            # 5 Nov: a Checked order whose form nobody changed is corrected too - the checking file ticks orders whose lines
+            # match the spreadsheet, and left them "not an order" (49 in the queue, Dino 5 Nov)
+            if sc.get("doc_type") != "po" or (f.get("checked") and not named and form_changed(sc)) or Path(str(js) + ".uploaded").exists():
                 continue
             on = str(f.get("order_number") or "").upper().replace(" ", "")
             cand = ((f.get("form") == "not_an_order" and re.fullmatch(r"A\d{5}|PL\d{4}", on))
@@ -161,13 +190,13 @@ def main():
                 text2 = presort.page_text(pdf)[0]
             except Exception:
                 text2 = ""
-            j = judge(sc, text, text2)
+            j = judge(sc, text, text2) or sheet_says(sc, on)
             res = "left (page does not show the form)" if not j else "would fix" if not a.apply else "fixed"
             if j and a.apply:
                 try:
                     with sidecar_lock.locked(js, "ownform_fix"):
                         sc = json.load(open(js, encoding="utf-8"))
-                        if (sc.get("fields") or {}).get("checked") and not named:
+                        if (sc.get("fields") or {}).get("checked") and not named and form_changed(sc):
                             res = "skipped (checked meanwhile)"
                         else:
                             fix(js, sc, *j, stamp, held=js.parent.name == "hold")
