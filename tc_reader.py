@@ -987,3 +987,65 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ------------------------------------------------------------------------------------------------ batches (500)
+def _cert_key(v):
+    """The cert number as a grouping key, or None when it isn't one: the label ("No."), the inspection standard
+    (EN10204-3.1, N10204 3.2 - as tc_incomplete.real_cert_no), a title (JR MATERIAL TEST CERTIFICATE), or under 3
+    digits. "No.4500144015" and "4500144015" are the same cert."""
+    s = re.sub(r"\s+", " ", str(_clean(v) or "")).strip().upper()
+    s = re.sub(r"^(?:CERT(?:IFICATE)?\.?\s*)?(?:NO|N[O°º]|NUMBER|NR)\s*[.:]?\s*", "", s)
+    s = re.sub(r"\s*-\s*\d{1,2}\s*/\s*\d{1,2}$", "", s)        # sheet 3 of 6 of one cert: 13L02-3/6 -> 13L02
+    if not s or re.fullmatch(r"(BS ?)?(EN|N|DIN|ISO)? ?[-.]?(10204|10474)\b.*|3\.[12] ?[AB]?|2\.[12]", s) \
+            or re.search(r"10204|10474|CERTIFICATE|MATERIAL|\bTEST\b", s) or len(re.findall(r"\d", s)) < 3:
+        return None
+    if re.fullmatch(r"(A\d{5}|DF\d{4,5}|PL\d{4})[A-Z]{0,3}|IL\d{5}ZA\d+", re.sub(r"[^A-Z0-9]", "", s)):
+        return None                                     # MPS / Ronin / Polymer order or the L/C number, not the cert's
+    return _HKEY(s).translate(_ILO)
+
+
+def split_certs(pages):
+    """500 (Dino 5 Nov): a scanned batch -> [[page numbers] per test certificate number], in the order the numbers first
+    appear. A cert page with a number starts that cert's group or joins it again; a page without one stays with the
+    page before it; pages before the first numbered page go with the first cert. Numbers must match exactly once
+    normalised (I/L/O read as 1/1/0): neighbouring certs are often numbered one apart."""
+    groups, order, cur, lead = {}, [], None, []
+    for p in pages:
+        if not p.get("page"):
+            continue
+        a = p.get("answer") or {}
+        k = _cert_key(a.get("cert_no")) if a.get("page_type") in CERT_TYPES else None
+        if k:
+            if k not in groups:
+                groups[k] = []
+                order.append(k)
+            cur = k
+        (groups[cur] if cur else lead).append(p["page"])
+    if not order:
+        return _split_by_header(pages)
+    if len(order) == 1:
+        return [[p["page"] for p in pages if p.get("page")]]
+    groups[order[0]] = lead + groups[order[0]]
+    return [sorted(groups[k]) for k in order]
+
+
+def _split_by_header(pages):
+    """No cert numbers anywhere in the file (DOC051126-05112026094800: Shandong Zhongnuo certs with an empty "No." box,
+    one heat a page): a page with its own header (mtc, mill read) whose date or heats differ from the cert before
+    starts a new cert; a continuation or other page stays with the page before it."""
+    out, last = [], None
+    for p in pages:
+        if not p.get("page"):
+            continue
+        a = p.get("answer") or {}
+        heats = frozenset(k for k in ([norm_heat(h.get("heat_no")) for h in a.get("heats") or [] if isinstance(h, dict)]
+                                      + [norm_heat(i.get("heat_no")) for i in a.get("items") or [] if isinstance(i, dict)]) if k)
+        sig = (_clean(a.get("date_iso")), heats)
+        if a.get("page_type") == "mtc" and _clean(a.get("mill")) and heats and (not out or sig != last):
+            out.append([])
+            last = sig
+        if not out:
+            out.append([])
+        out[-1].append(p["page"])
+    return out

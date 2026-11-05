@@ -779,19 +779,39 @@ class Worker:
                 c[k] = act[k]
         return c
 
-    def read_tc(self, folder, work, src, meta, digest, loaded_before):
-        """One test-certificate file -> one document (the whole file is kept; extra pages are recorded, not split off)."""
+    def tc_part(self, work, page_nos, out):
+        """500: the pages page_nos of work as their own PDF."""
+        with tempfile.TemporaryDirectory() as t:
+            files = []
+            for p in page_nos:
+                f = os.path.join(t, f"p{p:04d}.pdf")
+                subprocess.run(["pdfseparate", "-f", str(p), "-l", str(p), str(work), f], check=True, capture_output=True, timeout=120)
+                files.append(f)
+            if len(files) == 1:
+                shutil.copyfile(files[0], out)
+            else:
+                subprocess.run(["pdfunite", *files, str(out)], check=True, capture_output=True, timeout=300)
+        return out
+
+    def read_tc(self, folder, work, src, meta, digest, loaded_before, td=None):
+        """One test-certificate file -> one document per test certificate number in it (500, Dino 5 Nov: a scanned
+        batch); a file with one cert is one document as before (extra pages are recorded, not split off)."""
         if not tc_reader:
             raise RuntimeError("tc_reader.py is missing beside worker.py")
         c = self.tc_settings(folder)
         name = meta.get("original_name") or src.name
         fam = meta.get("family") if meta.get("family") in tc_reader.FAMILIES else None    # the old library (backfill)
         t0 = time.time()
-        try:
+        reuse = read_json_file(self.root / str(meta.get("reuse_tc_pages"))) if meta.get("reuse_tc_pages") else None
+        if reuse and reuse.get("source_sha256") == digest and reuse.get("tc_pages"):
+            pages, n = reuse["tc_pages"], int(reuse.get("pages_read") or len(reuse["tc_pages"]))     # 500: read already
+            log.info("%s %s: page readings taken from %s", folder, src.name, meta["reuse_tc_pages"])
+        else:
+          try:
             pages, n = tc_reader.read(work, self.cfg["ollama_url"], c["model"], c["fewshot_dir"], fam, int(c["max_pages"]),
                                       int(c["px"]), int(c["chem_px"]), int(self.cfg.get("ollama_timeout", 900)),
                                       self.cfg.get("keep_alive", "15m"))
-        except (urllib.error.URLError, ConnectionError) as e:
+          except (urllib.error.URLError, ConnectionError) as e:
             if not ollama_up(self.cfg):
                 raise OllamaDown(str(e))
             raise
@@ -801,6 +821,26 @@ class Worker:
             if not ollama_up(self.cfg):
                 raise OllamaDown(errs[0].get("error") or "every page failed")
             raise RuntimeError("every page failed: " + str(errs[0].get("error"))[:300])
+        groups = tc_reader.split_certs(pages) if td is not None and hasattr(tc_reader, "split_certs") else []
+        if len(groups) > 1:                              # 500: one document per test certificate number
+            out = []
+            for i, g in enumerate(groups, 1):
+                sub = [dict(p, page=j, batch_page=p["page"]) for j, p in enumerate((q for q in pages if q.get("page") in g), 1)]
+                part = self.tc_part(work, g, Path(td) / f"cert{i:02d}.pdf")
+                pd = hashlib.sha256(part.read_bytes()).hexdigest()
+                fields, flags, extra = self.tc_document(sub, part, pd, name, fam, meta, c, loaded_before, src)
+                fields["split_from"] = f"{name}, pages {tc_reader.page_ranges([(x, 'x') for x in g]).replace(' x', '')} of {n}"
+                out.append((g[0], part, fields, flags, pd[:16], "tc", len(g), (time.time() - t0) / len(groups), extra))
+            log.info("%s %s %.1fs via tc_reader (%d pages): %d certs %s", folder, src.name, time.time() - t0, n, len(groups),
+                     [f.get("cert_no") for _, _, f, *_ in out])
+            return out
+        fields, flags, extra = self.tc_document(pages, work, digest, name, fam, meta, c, loaded_before, src)
+        log.info("%s %s %.1fs via tc_reader (%d pages) flags=%s", folder, src.name, time.time() - t0, n, flags)
+        return [(None, work, fields, flags, digest[:16], "tc", n, time.time() - t0, extra)]
+
+    def tc_document(self, pages, work, digest, name, fam, meta, c, loaded_before, src):
+        """One test certificate's page readings -> (fields, flags, extra)."""
+        errs = [p for p in pages if p.get("page") and p.get("how") == "error"]
         fields, flags = tc_reader.to_fields(tc_reader.merge(pages, name, fam), name, fam)
         fields["content_hash"] = digest.upper()
         if errs:
@@ -821,8 +861,7 @@ class Worker:
             except Exception as e:
                 log.warning("tc_orders on %s: %s", src.name, e)
         extra = {"tc_model": c["model"], "tc_pages": pages, "models_loaded_before": loaded_before}
-        log.info("%s %s %.1fs via tc_reader (%d pages) flags=%s", folder, src.name, time.time() - t0, n, flags)
-        return [(None, work, fields, flags, digest[:16], "tc", n, time.time() - t0, extra)]
+        return fields, flags, extra
 
     def pop_model(self):
         """Proofs of payment are read with the order model unless ProofOfPayments names its own, so a payment
@@ -1305,7 +1344,9 @@ class Worker:
         if doc_type == "ws" and ws_reader:
             return safe_name(ws_reader.library_name(fields, src.name, "")[:150]) or safe_name(src.stem)
         if doc_type == "test_cert":       # keeps its own name (the library item's name in the backfill), Windows-safe
-            return re.sub(r"\s+", " ", re.sub(r'[\\/:*?"<>|#%]+', " ", src.stem)).strip(" .")[:150] or "document"
+            real = tc_reader and tc_reader._cert_key(fields.get("cert_no"))         # 500: a batch's cert, by its number
+            stem = src.stem + ((f" - {fields['cert_no']}" if real else f" p{page}") if page else "")
+            return re.sub(r"\s+", " ", re.sub(r'[\\/:*?"<>|#%]+', " ", stem)).strip(" .")[:150] or "document"
         if doc_type == "jt" and fields.get("jt_number"):
             n = str(fields["jt_number"])
             stem = f"JT{n}" if n.isdigit() else n              # Ronin: DF16593, as the AR - Ronin JTs library names them
@@ -1380,7 +1421,7 @@ class Worker:
                         time.sleep(5)
                     if _stop:
                         raise OllamaDown("shutdown")
-                    staged += self.read_tc(folder, work, src, meta, digest, loaded_before)
+                    staged += self.read_tc(folder, work, src, meta, digest, loaded_before, Path(td))
                 for page, part in parts:
                     while self.paused() and not tcfg.get("cpu_first") and not _stop:
                         time.sleep(5)
