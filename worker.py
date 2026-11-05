@@ -845,7 +845,7 @@ class Worker:
         fields["content_hash"] = digest.upper()
         if errs:
             flags.append(f"check: {len(errs)} page(s) could not be read")
-        for k in ("old_columns", "old_url", "sp_item_id", "sp_url", "sync_mode"):     # backfill: the library item it came from
+        for k in ("old_columns", "old_url", "sp_item_id", "sp_url", "sync_mode", "replaces"):   # backfill: the library item it came from; 513: the combined item a part replaces
             if meta.get(k) not in (None, ""):
                 fields[k] = meta[k]
         for it in fields.get("items") or []:          # the Test Cert Items "Unit" choice: pcs, m, kg
