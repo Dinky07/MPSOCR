@@ -208,6 +208,7 @@ def judge(x, y, equal_counts):
 
 
 STABLE = "PO lines training.xlsx"
+JOBS = set()                      # 503: the Sage job list (jobs_sage.csv, from MPSBusiness)
 AUTO_COLS = [("Auto Use", "auto_use", 4), ("Auto qty", "auto_qty", 4), ("Auto price", "auto_price", 4),
              ("Auto description", "auto_desc", 4), ("Auto description verified", "auto_desc_ok", 4)]
 
@@ -275,6 +276,13 @@ def main():
     out = Path(a.out) if a.out else root / "training" / "po_lines"
     out.mkdir(parents=True, exist_ok=True)
     regs = json.load(open(root / "work" / "po_daily" / "registers.json", encoding="utf-8"))
+    import csv
+    JOBS.update(_n(r.get("JobNumber")) for r in csv.DictReader(open(root / "jobs_sage.csv", encoding="utf-8-sig")))
+    try:                                             # and the Job File list on SharePoint (jobs_jobfile.csv)
+        for r in csv.DictReader(open(root / "jobs_jobfile.csv", encoding="utf-8-sig")):
+            JOBS.add(_n(r.get("JobNumber") or r.get("Title") or r.get("Job")))
+    except OSError:
+        pass
     seen, rows, orders, cnt = set(), [], [], Counter()
     pats = [("queue", "out/PurchaseOrders/*.json"), ("hold", "out/PurchaseOrders/hold/*.json"), ("synced", "synced/PurchaseOrders/*/*.json")]
     for where, pat in pats:
@@ -320,6 +328,9 @@ def main():
             pairs = align(ri, gi)
             o_lines, o_ok = [], True
             d_final, d_ok, d_why = date_final(rd.get("date"), reg.get("date"))
+            # 503: the job - the order's (the file name's where it has one), verified when every job is in the Sage job list
+            jf = f.get("job_number")
+            j_ok = bool(jf) and all(_n(x) in JOBS for x in str(jf).split(","))
             cnt["order date " + ("verified" if d_ok else "unverified")] += 1
             for k, (x, y) in enumerate(pairs, 1):
                 st, what, note, fq, fp, fd, s = judge(x, y, len(ri) == len(gi))
@@ -335,7 +346,9 @@ def main():
                        "desc_ok": "Y" if (s is not None and s >= 0.8) else "",
                        "where": where, "book": f"{reg.get('book')} / {reg.get('tab')} row {reg.get('row')}", "pdf": rel,
                        "hash": h, "corrected_before": bool(sc.get("fields_read")), "checked_how": sc.get("checked_how") or "",
-                       "supplier_read": sup, "date_read": rd.get("date"), "date_final": d_final, "date_ok": "Y" if d_ok else "",
+                       "supplier_read": rd.get("supplier_read") or sup, "date_read": rd.get("date_read") or rd.get("date"), "date_final": d_final, "date_ok": "Y" if d_ok else "",
+                       "job_read": rd.get("job_number_read") or rd.get("job_number"), "job_final": jf if j_ok else None,
+                       "job_ok": "Y" if j_ok else "",
                        "date_why": d_why}
                 rows.append(row)
                 o_lines.append(row)
@@ -393,7 +406,8 @@ def main():
             ("Alike", "desc_alike", 6), ("Description verified", "desc_ok", 9), ("Lines read", "lines_read", 6), ("Lines sheet", "lines_sheet", 6), ("Where", "where", 7),
             ("Spreadsheet", "book", 34), ("Already corrected", "corrected_before", 9), ("Ref", "pdf", 50), ("Hash", "hash", 12),
             ("Changed by you", "edited", 8), ("Supplier read", "supplier_read", 22), ("Date read", "date_read", 11),
-            ("Date FINAL", "date_final", 11), ("Date verified", "date_ok", 8), ("Date note", "date_why", 24)] + AUTO_COLS
+            ("Date FINAL", "date_final", 11), ("Date verified", "date_ok", 8), ("Date note", "date_why", 24), ("Job read", "job_read", 10),
+            ("Job FINAL", "job_final", 10), ("Job verified", "job_ok", 7)] + AUTO_COLS
     ws.append([c[0] for c in cols])
     bold = Font(bold=True)
     fill = {"corrected": PatternFill("solid", fgColor="E8F4E8"), "check": PatternFill("solid", fgColor="FFF2CC"),

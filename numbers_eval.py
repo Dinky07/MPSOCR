@@ -57,7 +57,7 @@ def parse_header(txt):
     m = re.search(r"\{.*\}", txt, re.S)
     try:
         d = json.loads(m.group(0)) if m else {}
-        return {"supplier": d.get("supplier"), "date": str(d.get("date") or "")[:10] or None} if isinstance(d, dict) else {}
+        return {"supplier": d.get("supplier"), "date": str(d.get("date") or "")[:10] or None, "job": d.get("job")} if isinstance(d, dict) else {}
     except ValueError:
         return {}
 
@@ -85,7 +85,7 @@ def read(img):
 
 
 KINDS = ("main", "numbers", "combined", "combined_desc")
-tot = {k: {"qty": [0, 0], "price": [0, 0], "description": [0, 0], "supplier": [0, 0], "date": [0, 0]} for k in KINDS}
+tot = {k: {"qty": [0, 0], "price": [0, 0], "description": [0, 0], "supplier": [0, 0], "date": [0, 0], "job": [0, 0]} for k in KINDS}
 docs, t0 = [], time.time()
 for i, r in enumerate(tests, 1):
     s = time.time()
@@ -121,6 +121,9 @@ for i, r in enumerate(tests, 1):
             if vh.get("date") and vh.get("date_verified"):
                 tot[k]["date"][1] += 1
                 tot[k]["date"][0] += str(got.get("date") or "")[:10] == vh["date"]
+            if vh.get("job") and vh.get("job_verified"):                     # 503
+                tot[k]["job"][1] += 1
+                tot[k]["job"][0] += norm(got.get("job")) == norm(vh["job"])
     docs.append({"file": r["file"], "secs": round(time.time() - s, 1), "raw": raw, "numbers": nums, "main": main,
                  "verified": ver, "numbers_used": used})
     print(f"  {i}/{len(tests)} {r['file'][:50]:50} {time.time() - s:5.1f}s lines {len(ver)} numbers {len(nums or [])} main {len(main)}", flush=True)
@@ -136,4 +139,4 @@ print(f"{'':14}{'line qty':>12}{'line price':>12}{'description':>13}{'supplier':
 pc = lambda v, w: f"{v * 100:{w - 1}.1f}%" if v is not None else f"{'-':>{w}}"
 for k in KINDS:
     print(f"{k:14}" + pc(res[k]["qty"]["acc"], 12) + pc(res[k]["price"]["acc"], 12) + pc(res[k]["description"]["acc"], 13)
-          + pc(res[k]["supplier"]["acc"], 10) + pc(res[k]["date"]["acc"], 8))
+          + pc(res[k]["supplier"]["acc"], 10) + pc(res[k]["date"]["acc"], 8) + pc(res[k]["job"]["acc"], 8))

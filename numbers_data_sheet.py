@@ -35,16 +35,17 @@ def num(v):
 PROMPT = ND.PROMPT.replace(
     "Read ONLY the order lines (the table of items).",
     "Read the supplier (the name written on the M line at the top left), the order date (DATE: at the top right, written "
-    "day.month.year) and the order lines (the table of items).").replace(
+    "day.month.year), the job number (written next to the date or on the order, e.g. 31337E; null when there is none) and the "
+    "order lines (the table of items).").replace(
     'Answer with JSON only: {"lines":',
-    'Answer with JSON only: {"supplier": text or null, "date": "YYYY-MM-DD" or null, "lines":')
+    'Answer with JSON only: {"supplier": text or null, "date": "YYYY-MM-DD" or null, "job": text or null, "lines":')
 assert PROMPT != ND.PROMPT and PROMPT.count('"supplier"') == 1 and "order date" in PROMPT, "numbers prompt changed: header not added"
 
 
 def answer(e):
     a = json.loads(ND.answer(e["items"]))
     h = e.get("header") or {}
-    return json.dumps({"supplier": h.get("supplier"), "date": h.get("date"), "lines": a["lines"]}, ensure_ascii=False)
+    return json.dumps({"supplier": h.get("supplier"), "date": h.get("date"), "job": h.get("job"), "lines": a["lines"]}, ensure_ascii=False)
 
 
 def main():
@@ -83,10 +84,13 @@ def main():
         main = [{"qty": num(r[I["Qty read"]]), "unit_price": num(r[I["Price read"]]), "description": r[I["Description read"]]}
                 for r in rs if r[I["Status"]] != "sheet only"]
         r0 = rs[0]
-        hdr = {"supplier": r0[I["Supplier"]], "date": str(r0[I["Date FINAL"]] or "")[:10] or None} if "Date FINAL" in I else None
+        hdr = {"supplier": r0[I["Supplier"]], "date": str(r0[I["Date FINAL"]] or "")[:10] or None,
+               "job": r0[I["Job FINAL"]] if "Job FINAL" in I else None} if "Date FINAL" in I else None
         e = {"hash": h, "pdf": str(ROOT / str(r0[I["Ref"]]).replace("\\", "/")), "items": items, "main": main,
              "desc_ok": [yes(r[I["Description verified"]]) for r in rs], "header": hdr,
-             "header_read": {"supplier": r0[I["Supplier read"]], "date": str(r0[I["Date read"]] or "")[:10] or None} if hdr else None,
+             "header_read": {"supplier": r0[I["Supplier read"]], "date": str(r0[I["Date read"]] or "")[:10] or None,
+                             "job": r0[I["Job read"]] if "Job read" in I else None} if hdr else None,
+             "job_ok": yes(r0[I["Job verified"]]) if hdr and "Job verified" in I else False,
              "date_ok": yes(r0[I["Date verified"]]) if hdr else False}
         (tests if T.is_test(h) else train).append(e)
     tests = sorted(tests, key=lambda e: e["hash"])[: a.test_max or None]          # 0 = every test order (Dino 4 Nov)
@@ -114,7 +118,7 @@ def main():
                     rec["verified"] = [{"qty": i["quantity"], "unit_price": i["unit_price"], "description": i["description"]} for i in e["items"]]
                     rec["main"] = e["main"]
                     rec["description_verified"] = e["desc_ok"]
-                    rec["verified_header"] = dict(e["header"] or {}, date_verified=e["date_ok"])
+                    rec["verified_header"] = dict(e["header"] or {}, date_verified=e["date_ok"], job_verified=e["job_ok"])
                     rec["main_header"] = e["header_read"]
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 n += 1

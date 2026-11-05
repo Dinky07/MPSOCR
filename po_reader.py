@@ -143,7 +143,8 @@ _NOT_SUPPLIER = re.compile(r"QUOTE|APPROVAL|^POLYMER$|^MPS\b|AMENDED|CANCEL|^VEH
 def file_supplier(base):
     """Supplier typed into the scan's file name ("NUVO RUBBER-PLS2200-POLYMER-...", "PO7032-PL8239-STONCOR-POLYMER"):
     the name next to an order number. None when the name doesn't follow that pattern."""
-    segs = [x.strip() for x in os.path.splitext(base)[0].upper().split("-")]
+    segs = [x.strip() for x in os.path.splitext(re.sub(r"^[A-Z]+__", "", base.upper()))[0].split("-")]
+    segs = [x for x in segs if not re.fullmatch(r"KUSASA|PAGE\s*\d*|P\s*\d+", x)]        # 503
     for i, x in enumerate(segs):
         if _ORDER_TOKEN.match(x) or len(re.sub(r"[^A-Z]", "", x)) < 2:
             continue
@@ -244,7 +245,9 @@ def find_job(d, base, chk):
             if job and job not in jobs:
                 jobs.append(job); recs.append(rec)
         nd = {int(x) for x, _ in named}
-        if read and not all(int(r[0]) in nd for r in read):
+        if recs and all(recs):
+            pass                    # 503: every job in the file name is in the Sage job list - the file name wins, no check
+        elif read and not all(int(r[0]) in nd for r in read):
             chk.append(f"job: file name says {', '.join(jobs)}, form reads {d['job_number_read']}")
         elif read and any(r[1] and (int(r[0]), r[1]) not in {(int(x), l) for x, l in named} for r in read):
             chk.append(f"job: file name says {', '.join(jobs)}, form reads {d['job_number_read']}")
@@ -370,7 +373,10 @@ def tidy(d, rel, source_folder=None, source_pdf=None, source_modified=None, sour
             d["supplier"] = fsup
             chk.append(f"supplier not read: {fsup} taken from the file name")
         elif not (k1 in k2 or k2 in k1):
-            chk.append(f"file name says supplier {fsup}")
+            if _known_supplier(fsup):                    # 503: typed when scanned, and a supplier MPSBusiness knows
+                d["supplier_read"], d["supplier"], d["supplier_from_name"] = d["supplier"], fsup, True
+            else:
+                chk.append(f"file name says supplier {fsup}")
         d["supplier_file"] = fsup
     dsup = folder_supplier(source_folder) if form != "internal_group_transfer" else None
     if dsup and not d["supplier"]:
@@ -386,7 +392,7 @@ def tidy(d, rel, source_folder=None, source_pdf=None, source_modified=None, sour
         kr = re.sub(r"[^A-Z0-9]", "", rule[0].upper())
         if fsup and (re.sub(r"[^A-Z0-9]", "", fsup) in kr or kr in re.sub(r"[^A-Z0-9]", "", fsup)):
             chk[:] = [c for c in chk if c != f"file name says supplier {fsup}"]
-    if d["supplier"] and not rule:
+    if d["supplier"] and not rule and not d.get("supplier_from_name"):
         known = snap_supplier(d["supplier"], form == "polymer_order" or str(d.get("order_number") or "").upper().startswith("PL"))
         if known:
             chk.append(f"supplier read as {d['supplier']}, matched to {known}")
