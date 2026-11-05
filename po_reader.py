@@ -265,6 +265,32 @@ def find_job(d, base, chk):
 EXAMPLE_NUMBERS = {"A80532", "PL7512", "DF2914", "A84403", "16013"}     # prompt + worked examples
 
 
+_SUPPLIERS = None
+
+
+def _known_supplier(name):
+    """502: a supplier MPS buys from - training/suppliers_verified.json ("all") or the Sage list (suppliers.csv)."""
+    global _SUPPLIERS
+    norm = lambda v: re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
+    if _SUPPLIERS is None:
+        _SUPPLIERS = set()
+        root = "/srv/ocr/scans/pipeline"
+        try:
+            for x in json.load(open(root + "/training/suppliers_verified.json", encoding="utf-8")).get("all") or []:
+                _SUPPLIERS.add(norm(x if isinstance(x, str) else (x.get("name") or x.get("supplier"))))
+        except Exception:
+            pass
+        try:
+            import csv
+            for r in csv.DictReader(open(root + "/suppliers.csv", encoding="utf-8-sig")):
+                _SUPPLIERS.add(norm(r.get("Name")))
+        except Exception:
+            pass
+        _SUPPLIERS = {x for x in _SUPPLIERS if len(x) >= 4}
+    n = norm(name)
+    return len(n) >= 4 and any(n in x or x in n for x in _SUPPLIERS)
+
+
 def tidy(d, rel, source_folder=None, source_pdf=None, source_modified=None, source_sha256=None):
     chk = []
     base = re.sub(r"^[A-Z]+__", "", os.path.basename(rel).upper())    # the worker's copy is "<Type>__<file name>"
@@ -318,7 +344,7 @@ def tidy(d, rel, source_folder=None, source_pdf=None, source_modified=None, sour
     # 500 (Dino 5 Nov): "purchase_order" but "not_an_order" for the same page - an MPS order form whose letterhead the
     # model missed (2017 scans cut off at the top). An A-number read on the page and a supplier settle it
     if form == "not_an_order" and d.get("doc_type") == "purchase_order" and dig and on2 and re.fullmatch(r"A\d{5}", on2) \
-            and str(d.get("supplier") or "").strip():
+            and str(d.get("supplier") or "").strip() and _known_supplier(d.get("supplier")):
         d["form_read"] = "not_an_order"
         form = d["form"] = "mps_order"
     # supplier must not be our own company
