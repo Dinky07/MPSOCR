@@ -1010,24 +1010,37 @@ def split_certs(pages):
     appear. A cert page with a number starts that cert's group or joins it again; a page without one stays with the
     page before it; pages before the first numbered page go with the first cert. Numbers must match exactly once
     normalised (I/L/O read as 1/1/0): neighbouring certs are often numbered one apart."""
-    groups, order, cur, lead = {}, [], None, []
+    groups, order, cur, lead, numbered = {}, [], None, [], 0
     for p in pages:
         if not p.get("page"):
             continue
         a = p.get("answer") or {}
         k = _cert_key(a.get("cert_no")) if a.get("page_type") in CERT_TYPES else None
+        if k and k in {_HKEY(o.get("value") if isinstance(o, dict) else o).translate(_ILO) for o in a.get("order_numbers") or []}:
+            k = None                                      # 506: the page's order number read into the cert number box
+        numbered += bool(k)
         if k:
             if k not in groups:
                 groups[k] = []
                 order.append(k)
             cur = k
         (groups[cur] if cur else lead).append(p["page"])
-    if not order:
-        return _split_by_header(pages)
+    if not order or 2 * numbered < sum(1 for p in pages if _header_page(p)):
+        return _split_by_header(pages)                    # 506: no numbers, or too few to group by
     if len(order) == 1:
         return [[p["page"] for p in pages if p.get("page")]]
     groups[order[0]] = lead + groups[order[0]]
     return [sorted(groups[k]) for k in order]
+
+
+def _page_heats(a):
+    return frozenset(k for k in ([norm_heat(h.get("heat_no")) for h in a.get("heats") or [] if isinstance(h, dict)]
+                                 + [norm_heat(i.get("heat_no")) for i in a.get("items") or [] if isinstance(i, dict)]) if k)
+
+
+def _header_page(p):
+    a = p.get("answer") or {}
+    return bool(p.get("page")) and a.get("page_type") == "mtc" and bool(_clean(a.get("mill"))) and bool(_page_heats(a))
 
 
 def _split_by_header(pages):
