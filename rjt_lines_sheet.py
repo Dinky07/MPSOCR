@@ -167,7 +167,7 @@ def main():
             o_rows = []
             for k, (x, y) in enumerate(align(ri, gi), 1):
                 st, what, note, fc, fq = judge(x, y)
-                use = "Y" if st in ("match", "corrected") else ""
+                use = "Y" if st in ("match", "corrected", "no code written") else ""   # Dino 5 Nov: the code is built from the description too
                 x, y = x or {}, y or {}
                 row = {"use": use, "status": st, "differs": what, "notes": note, "jt": jt, "date": f.get("date"), "captured_date": gi[0]["date"],
                        "job": f.get("job_number"), "line": k, "lines_read": len(ri), "lines_captured": len(gi),
