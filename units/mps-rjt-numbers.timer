@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS one-off: Ronin JT numbers model, 5 Nov 2026 21:00
+[Timer]
+OnCalendar=2026-11-05 21:00:00
+Persistent=false
+Unit=mps-rjt-numbers.service
+[Install]
+WantedBy=timers.target
