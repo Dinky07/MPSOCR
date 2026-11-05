@@ -151,9 +151,10 @@ def main():
                 cnt["no DF number read"] += 1
                 continue
             h = f.get("content_hash") or sc.get("source_sha256") or js
-            if h in seen:
+            if h in seen or jt in seen:
+                cnt["same JT read twice (NAS scan and library copy)"] += 1      # one row per DF number: never the same JT in train and test
                 continue
-            seen.add(h)
+            seen.add(h); seen.add(jt)
             cnt["JTs read"] += 1
             gi = cap.get(jt)
             if not gi:
