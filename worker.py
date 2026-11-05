@@ -1344,8 +1344,9 @@ class Worker:
         if doc_type == "ws" and ws_reader:
             return safe_name(ws_reader.library_name(fields, src.name, "")[:150]) or safe_name(src.stem)
         if doc_type == "test_cert":       # keeps its own name (the library item's name in the backfill), Windows-safe
-            real = tc_reader and tc_reader._cert_key(fields.get("cert_no"))         # 500: a batch's cert, by its number
-            stem = src.stem + ((f" - {fields['cert_no']}" if real else f" p{page}") if page else "")
+            real = tc_reader and next((x for x in re.split(r"\s*[;,]\s*", str(fields.get("cert_no") or ""))
+                                       if tc_reader._cert_key(x)), None)       # 500: a batch's cert, by its number; 516: not its L/C no.
+            stem = src.stem + ((f" - {real}" if real else f" p{page}") if page else "")
             return re.sub(r"\s+", " ", re.sub(r'[\\/:*?"<>|#%]+', " ", stem)).strip(" .")[:150] or "document"
         if doc_type == "jt" and fields.get("jt_number"):
             n = str(fields["jt_number"])
