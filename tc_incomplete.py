@@ -58,7 +58,7 @@ def kind(sc, pdf):
     items, heats, cert = f.get("items") or [], f.get("heats") or [], real_cert_no(f.get("cert_no"))
     if cert and not items and not heats:
         return "header only"
-    if (items or heats) and not cert:
+    if (items or heats) and not cert and not (f.get("mill") and f.get("date")):   # 508: its own header: a whole cert
         return "body only"
     for a, b in re.findall(r"PAGE\s*:?\s*(\d{1,2})\s*(?:OF|/)\s*(\d{1,2})\b", text_of(pdf)):
         if int(b) <= 20 and int(b) > int(f.get("pages") or 0) and int(a) <= int(b):
@@ -116,6 +116,30 @@ def hold_it(js, sc, why, stamp):
             D.move_doc(Q, H, js.name, json_last=False)
 
 
+def release_it(js, sc, stamp):
+    """508: off the incomplete hold - back to the queue, or to the hold reason it had before this rule held it."""
+    with sidecar_lock.locked(js, "tc_incomplete"):
+        sc = json.load(open(js, encoding="utf-8"))
+        before = next((c.get("old") for e in reversed(sc.get("edits") or []) if str(e.get("by", "")).startswith("tc_incomplete")
+                       for c in e.get("changes") or [] if c.get("field") == "hold_reason"), None)
+        old = sc.get("hold_reason")
+        sc["flags"] = [x for x in (sc.get("flags") or []) if not HELD_FLAG.match(str(x)) and not str(x).startswith(REASON)]
+        if before:
+            sc["hold_reason"] = before
+            sc["flags"].append("held: " + before)
+        else:
+            sc.pop("hold_reason", None)
+        sc["needs_review"] = bool(sc["flags"])
+        sc.setdefault("edits", []).append({"at": stamp, "by": "tc_incomplete (Dino 5 Nov: a cert with its own header is not incomplete)",
+                                           "changes": [{"field": "hold_reason", "old": old, "new": before}]})
+        tmp = js.with_name(js.name + ".tci.tmp")
+        tmp.write_text(json.dumps(sc, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        os.replace(tmp, js)
+        if not before:
+            D.move_doc(H, Q, js.name, json_last=False)
+    return before
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
@@ -138,6 +162,19 @@ def main():
                 continue
             k = kind(sc, js.with_name(str(sc.get("file") or "")))
             docs.append((where, js, sc, k))
+    # 0. release (508): held by this rule, no longer incomplete
+    for where, js, sc, k in docs:
+        if where == "hold" and not k and str(sc.get("hold_reason") or "").startswith(REASON):
+            res = "would release"
+            if a.apply:
+                try:
+                    b = release_it(js, sc, stamp)
+                    res = "released" + (f" (back on hold: {b})" if b else "")
+                except sidecar_lock.Locked:
+                    res = "skipped: locked"
+            cnt[res.split(" (")[0]] += 1
+            rows.append({"document": js.name, "source_file": sc.get("source_file"), "where": where, "kind": "",
+                         "cert_no": (sc.get("fields") or {}).get("cert_no"), "keys": "", "partners": "", "result": res})
     # 1. hold
     for where, js, sc, k in docs:
         if not k:
