@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS test-cert copies every 15 minutes (after the incomplete-cert check)
+[Timer]
+OnCalendar=*-*-* *:10,25,40,55:00
+Persistent=false
+Unit=mps-tc-copies.service
+[Install]
+WantedBy=timers.target

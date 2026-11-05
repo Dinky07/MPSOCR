@@ -1,0 +1,11 @@
+[Unit]
+Description=MPS test-cert copies (Dino 5 Nov): copies of one cert -> the most readable kept, orders and marked lines from the others
+OnFailure=mps-alert@%n.service
+[Service]
+Type=oneshot
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+Nice=5
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/tc_copies.py --apply
+TimeoutStartSec=50min
