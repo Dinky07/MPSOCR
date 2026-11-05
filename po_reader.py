@@ -315,6 +315,12 @@ def tidy(d, rel, source_folder=None, source_pdf=None, source_modified=None, sour
     elif on_file and not on2:
         chk.append(f"order number not read: {on_file} taken from the file name")
         d["order_number"] = on2 = on_file
+    # 500 (Dino 5 Nov): "purchase_order" but "not_an_order" for the same page - an MPS order form whose letterhead the
+    # model missed (2017 scans cut off at the top). An A-number read on the page and a supplier settle it
+    if form == "not_an_order" and d.get("doc_type") == "purchase_order" and dig and on2 and re.fullmatch(r"A\d{5}", on2) \
+            and str(d.get("supplier") or "").strip():
+        d["form_read"] = "not_an_order"
+        form = d["form"] = "mps_order"
     # supplier must not be our own company
     sup = (d.get("supplier") or "").strip()
     if form == "internal_group_transfer" and d.get("transfer_from"):
