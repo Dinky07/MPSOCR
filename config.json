@@ -1,303 +1,311 @@
 {
- "root": "/srv/ocr/scans/pipeline",
- "state_db": "/srv/ocr/pipeline/state.db",
- "ollama_url": "http://127.0.0.1:11434",
- "model": "qwen2.5vl:7b",
- "keep_alive": "4h",
- "num_ctx": 49152,
- "ollama_timeout": 900,
- "dpi": 200,
- "max_pages_per_doc": 4,
- "poll_seconds": 5,
- "stable_seconds": 10,
- "day_first_dates": true,
- "collector": {
-  "poll_seconds": 60,
-  "stable_seconds": 60,
-  "sources": [
-   {
-    "path": "/mnt/nas-scans/ScanToFile/Chronoscan/Delivery Notes MPS",
-    "type_folder": "DeliveryNotes",
-    "recursive": true,
-    "pattern": "*",
-    "only_newer_than": "2026-10-21"
-   },
-   {
-    "path": "/mnt/nas-scans/ScanToFile/Chronoscan/Release Notes",
-    "type_folder": "ReleaseNotes",
-    "recursive": true,
-    "pattern": "*",
-    "only_newer_than": "2026-10-01"
-   },
-   {
-    "path": "/mnt/nas-scans/ScanToFile/Chronoscan/JTs Ronin",
-    "type_folder": "RoninJobTransfers",
-    "recursive": false,
-    "pattern": "*.pdf",
-    "only_newer_than": "2026-10-17"
-   },
-   {
-    "path": "/mnt/nas-scans/ScanToFile/Chronoscan/MPS Orders",
-    "type_folder": "CustomerOrders",
-    "recursive": false,
-    "pattern": "*.pdf",
-    "only_newer_than": "2026-10-09"
-   },
-   {
-    "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts",
-    "type_folder": "TestCerts",
-    "recursive": false,
-    "pattern": "*.pdf",
-    "only_newer_than": "2026-11-03"
-   },
-   {
-    "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Fittings",
-    "type_folder": "TestCerts",
-    "recursive": false,
-    "pattern": "*.pdf",
-    "only_newer_than": "2026-11-03"
-   },
-   {
-    "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Flanges",
-    "type_folder": "TestCerts",
-    "recursive": false,
-    "pattern": "*.pdf",
-    "only_newer_than": "2026-11-03"
-   },
-   {
-    "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Pipe",
-    "type_folder": "TestCerts",
-    "recursive": false,
-    "pattern": "*.pdf",
-    "only_newer_than": "2026-11-03"
-   }
-  ]
- },
- "doc_types": {
-  "JobTransfers": {
-   "doc_type": "jt",
-   "split_pages": true,
-   "max_pages": 1,
-   "command": null,
-   "jt_reader": {
-    "model": "qwen2.5vl:7b",
-    "fewshot_dir": "/srv/ocr/pipeline/jt_fewshot",
-    "px": 1600
-   }
+  "root": "/srv/ocr/scans/pipeline",
+  "state_db": "/srv/ocr/pipeline/state.db",
+  "ollama_url": "http://127.0.0.1:11434",
+  "model": "qwen2.5vl:7b",
+  "keep_alive": "4h",
+  "num_ctx": 49152,
+  "ollama_timeout": 900,
+  "dpi": 200,
+  "max_pages_per_doc": 4,
+  "poll_seconds": 5,
+  "stable_seconds": 10,
+  "day_first_dates": true,
+  "collector": {
+    "poll_seconds": 60,
+    "stable_seconds": 60,
+    "sources": [
+      {
+        "path": "/mnt/nas-scans/ScanToFile/Chronoscan/Delivery Notes MPS",
+        "type_folder": "DeliveryNotes",
+        "recursive": true,
+        "pattern": "*",
+        "only_newer_than": "2026-10-21"
+      },
+      {
+        "path": "/mnt/nas-scans/ScanToFile/Chronoscan/Release Notes",
+        "type_folder": "ReleaseNotes",
+        "recursive": true,
+        "pattern": "*",
+        "only_newer_than": "2026-10-01"
+      },
+      {
+        "path": "/mnt/nas-scans/ScanToFile/Chronoscan/JTs Ronin",
+        "type_folder": "RoninJobTransfers",
+        "recursive": false,
+        "pattern": "*.pdf",
+        "only_newer_than": "2026-10-17"
+      },
+      {
+        "path": "/mnt/nas-scans/ScanToFile/Chronoscan/MPS Orders",
+        "type_folder": "CustomerOrders",
+        "recursive": false,
+        "pattern": "*.pdf",
+        "only_newer_than": "2026-10-09"
+      },
+      {
+        "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts",
+        "type_folder": "TestCerts",
+        "recursive": false,
+        "pattern": "*.pdf",
+        "only_newer_than": "2026-11-03"
+      },
+      {
+        "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Fittings",
+        "type_folder": "TestCerts",
+        "recursive": false,
+        "pattern": "*.pdf",
+        "only_newer_than": "2026-11-03"
+      },
+      {
+        "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Flanges",
+        "type_folder": "TestCerts",
+        "recursive": false,
+        "pattern": "*.pdf",
+        "only_newer_than": "2026-11-03"
+      },
+      {
+        "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Pipe",
+        "type_folder": "TestCerts",
+        "recursive": false,
+        "pattern": "*.pdf",
+        "only_newer_than": "2026-11-03"
+      },
+      {
+        "path": "/mnt/nas-scans/ScanToFile/Chronoscan/JTs MPS",
+        "type_folder": "JobTransfers",
+        "recursive": false,
+        "pattern": "*.pdf",
+        "only_newer_than": "2026-10-19",
+        "_note": "Dino 5 Nov 2026: MPS JTs scanned to Chronoscan\\JTs MPS (imported\\ was uploaded by Chronoscan up to 19 Oct)"
+      }
+    ]
   },
-  "PurchaseOrders": {
-   "doc_type": "po",
-   "split_pages": true,
-   "max_pages": 2,
-   "command": null,
-   "hold_unless": [
-    {
-     "order_number": "^A\\d{5}$"
+  "doc_types": {
+    "JobTransfers": {
+      "doc_type": "jt",
+      "split_pages": true,
+      "max_pages": 1,
+      "command": null,
+      "jt_reader": {
+        "model": "qwen2.5vl:7b",
+        "fewshot_dir": "/srv/ocr/pipeline/jt_fewshot",
+        "px": 1600
+      }
     },
-    {
-     "form": "^internal_group_transfer$",
-     "order_number": "^\\d{5}$"
-    }
-   ],
-   "proof_of_payment": "keep",
-   "routes": [
-    {
-     "field": "form",
-     "equals": "polymer_order",
-     "to": "PolymerOrders"
+    "PurchaseOrders": {
+      "doc_type": "po",
+      "split_pages": true,
+      "max_pages": 2,
+      "command": null,
+      "hold_unless": [
+        {
+          "order_number": "^A\\d{5}$"
+        },
+        {
+          "form": "^internal_group_transfer$",
+          "order_number": "^\\d{5}$"
+        }
+      ],
+      "proof_of_payment": "keep",
+      "routes": [
+        {
+          "field": "form",
+          "equals": "polymer_order",
+          "to": "PolymerOrders"
+        },
+        {
+          "field": "order_number",
+          "startswith": "PL",
+          "to": "PolymerOrders"
+        },
+        {
+          "field": "form",
+          "equals": "ronin_order",
+          "to": "RoninOrders"
+        },
+        {
+          "field": "order_number",
+          "startswith": "DF",
+          "to": "RoninOrders"
+        }
+      ],
+      "group_pages": true
     },
-    {
-     "field": "order_number",
-     "startswith": "PL",
-     "to": "PolymerOrders"
+    "SupplierInvoices": {
+      "doc_type": "supplier_invoice",
+      "split_pages": false,
+      "max_pages": 4,
+      "command": null,
+      "cpu_first": true,
+      "cpu": {
+        "require_items": true,
+        "ocr_dpi": 300,
+        "ocr_lang": "eng",
+        "vat_rates": [
+          0.15,
+          0.14
+        ],
+        "own_vat_numbers": [
+          "4320123039"
+        ],
+        "supplier_csv": "/srv/ocr/scans/pipeline/suppliers.csv"
+      },
+      "model": "qwen3-vl:8b-instruct"
     },
-    {
-     "field": "form",
-     "equals": "ronin_order",
-     "to": "RoninOrders"
+    "SupplierInvoicesArchive": {
+      "doc_type": "supplier_invoice",
+      "split_pages": false,
+      "max_pages": 4,
+      "command": null,
+      "cpu_first": true,
+      "cpu": {
+        "require_items": true,
+        "ocr_dpi": 300,
+        "ocr_lang": "eng",
+        "vat_rates": [
+          0.15,
+          0.14
+        ],
+        "own_vat_numbers": [
+          "4320123039"
+        ],
+        "supplier_csv": "/srv/ocr/scans/pipeline/suppliers.csv"
+      },
+      "model": "qwen3-vl:8b-instruct"
     },
-    {
-     "field": "order_number",
-     "startswith": "DF",
-     "to": "RoninOrders"
+    "PolymerOrders": {
+      "doc_type": "po",
+      "split_pages": true,
+      "max_pages": 2,
+      "command": null,
+      "label": "Polymer Orders",
+      "group_pages": true
+    },
+    "RoninOrders": {
+      "doc_type": "po",
+      "split_pages": true,
+      "max_pages": 2,
+      "command": null,
+      "label": "Ronin Purchase Orders",
+      "_note": "Ronin Flanges & Fittings orders (DF####), Dino 29 Oct 2026: AP - Authorised Purchase Orders library (StockControl) + MPSBusiness docs.PurchaseOrder",
+      "hold_unless": [
+        {
+          "order_number": "^DF\\d{4}$"
+        }
+      ],
+      "group_pages": true
+    },
+    "ProofOfPayments": {
+      "doc_type": "pop",
+      "label": "Proof of Payments",
+      "max_pages": 2
+    },
+    "DeliveryNotes": {
+      "doc_type": "delivery_note",
+      "label": "Delivery Notes",
+      "dn": {
+        "barcode_pattern": "^IN\\d{5,7}$",
+        "prefer_company": "MPS",
+        "sage_csv": "sage_invoices.csv",
+        "ocr": true,
+        "ocr_jobs": 4,
+        "hold_if_not_in_sage": true
+      }
+    },
+    "WorkshopSheets": {
+      "doc_type": "ws",
+      "label": "Workshop Sheets",
+      "ws_reader": {
+        "model": "qwen2.5vl:7b",
+        "px": 1600
+      }
+    },
+    "TestCerts": {
+      "doc_type": "test_cert",
+      "label": "Test Certificates",
+      "split_pages": false,
+      "max_pages": 30,
+      "tc_reader": {
+        "model": "qwen3-vl:8b-instruct",
+        "fewshot_dir": "",
+        "px": 1600,
+        "chem_px": 2000,
+        "max_pages": 30
+      }
+    },
+    "ReleaseNotes": {
+      "doc_type": "release_note",
+      "label": "Release Notes",
+      "split_pages": false,
+      "max_pages": 300,
+      "model": "qwen3-vl:8b-instruct",
+      "rn_reader": {
+        "model": "qwen3-vl:8b-instruct",
+        "px": 1800,
+        "ocr_jobs": 4
+      }
+    },
+    "OtherDocuments": {
+      "doc_type": "other_doc",
+      "label": "Other Documents",
+      "model": "qwen2.5vl:7b",
+      "_note": "filled by od_sort.py only (not read by the worker: flags/process_off_OtherDocuments)"
+    },
+    "SalesQuotes": {
+      "doc_type": "sales_quote",
+      "label": "Sales Quotes",
+      "model": "qwen2.5vl:7b",
+      "_note": "filled by route_sort.py only (not read by the worker: flags/process_off_SalesQuotes)"
+    },
+    "RoninJobTransfers": {
+      "doc_type": "jt",
+      "label": "Ronin Job Transfers",
+      "_note": "Ronin Flanges & Fittings job transfers (DF#####), Dino 29 Oct 2026: NAS Chronoscan\\JTs Ronin -> AR - Ronin JTs library (StockControl). Same JT reader as JobTransfers with jt_prompt_ronin.txt; the number keeps its DF.",
+      "split_pages": true,
+      "max_pages": 1,
+      "command": null,
+      "company": "Ronin",
+      "hold_unless": [
+        {
+          "jt_number": "^DF\\d{5}$"
+        }
+      ],
+      "jt_reader": {
+        "prompt": "jt_prompt_ronin.txt",
+        "number_prefix": "DF"
+      }
+    },
+    "CustomerOrders": {
+      "doc_type": "customer_order",
+      "label": "Customer Orders",
+      "_note": "Customer POs, Dino 30 Oct 2026: NAS Chronoscan\\MPS Orders -> Customer Orders library (MPS Sales) + MPSBusiness docs.CustomerOrder (D260) -> Evolution sales order import sheets. CPU first (OCR, job sticker, VAT -> account, lines), the vision model only for orders whose lines don't add up. Read ~2.5 h after the scan so Job File has the job (order no., value, FILE HANDED) for the cross-checks.",
+      "cpu_first": true,
+      "max_pages": 30,
+      "command": null,
+      "min_age_seconds": 9000,
+      "co_reader": {
+        "gpu_model": "qwen2.5vl:7b",
+        "gpu_px": 1600,
+        "gpu_max_pages": 4,
+        "ocr_jobs": 2
+      }
     }
-   ],
-   "group_pages": true
   },
-  "SupplierInvoices": {
-   "doc_type": "supplier_invoice",
-   "split_pages": false,
-   "max_pages": 4,
-   "command": null,
-   "cpu_first": true,
-   "cpu": {
-    "require_items": true,
-    "ocr_dpi": 300,
-    "ocr_lang": "eng",
-    "vat_rates": [
-     0.15,
-     0.14
-    ],
-    "own_vat_numbers": [
-     "4320123039"
-    ],
-    "supplier_csv": "/srv/ocr/scans/pipeline/suppliers.csv"
-   },
-   "model": "qwen3-vl:8b-instruct"
+  "dashboard": {
+    "bind": "0.0.0.0",
+    "port": 8090,
+    "session_hours": 12,
+    "password_hash": "pbkdf2_sha256$260000$eb44dd848a7720b3e994aef380f3148e$1cfb2ccd3009f70db327f73c578ec38b13efe53a4339a875b086654bc9f15270",
+    "services": [
+      "mps-ocr-worker",
+      "mps-ocr-collector"
+    ]
   },
-  "SupplierInvoicesArchive": {
-   "doc_type": "supplier_invoice",
-   "split_pages": false,
-   "max_pages": 4,
-   "command": null,
-   "cpu_first": true,
-   "cpu": {
-    "require_items": true,
-    "ocr_dpi": 300,
-    "ocr_lang": "eng",
-    "vat_rates": [
-     0.15,
-     0.14
-    ],
-    "own_vat_numbers": [
-     "4320123039"
-    ],
-    "supplier_csv": "/srv/ocr/scans/pipeline/suppliers.csv"
-   },
-   "model": "qwen3-vl:8b-instruct"
-  },
-  "PolymerOrders": {
-   "doc_type": "po",
-   "split_pages": true,
-   "max_pages": 2,
-   "command": null,
-   "label": "Polymer Orders",
-   "group_pages": true
-  },
-  "RoninOrders": {
-   "doc_type": "po",
-   "split_pages": true,
-   "max_pages": 2,
-   "command": null,
-   "label": "Ronin Purchase Orders",
-   "_note": "Ronin Flanges & Fittings orders (DF####), Dino 29 Oct 2026: AP - Authorised Purchase Orders library (StockControl) + MPSBusiness docs.PurchaseOrder",
-   "hold_unless": [
-    {
-     "order_number": "^DF\\d{4}$"
-    }
-   ],
-   "group_pages": true
-  },
-  "ProofOfPayments": {
-   "doc_type": "pop",
-   "label": "Proof of Payments",
-   "max_pages": 2
-  },
-  "DeliveryNotes": {
-   "doc_type": "delivery_note",
-   "label": "Delivery Notes",
-   "dn": {
-    "barcode_pattern": "^IN\\d{5,7}$",
-    "prefer_company": "MPS",
-    "sage_csv": "sage_invoices.csv",
-    "ocr": true,
-    "ocr_jobs": 4,
-    "hold_if_not_in_sage": true
-   }
-  },
-  "WorkshopSheets": {
-   "doc_type": "ws",
-   "label": "Workshop Sheets",
-   "ws_reader": {
-    "model": "qwen2.5vl:7b",
-    "px": 1600
-   }
-  },
-  "TestCerts": {
-   "doc_type": "test_cert",
-   "label": "Test Certificates",
-   "split_pages": false,
-   "max_pages": 30,
-   "tc_reader": {
-    "model": "qwen3-vl:8b-instruct",
-    "fewshot_dir": "",
-    "px": 1600,
-    "chem_px": 2000,
-    "max_pages": 30
-   }
-  },
-  "ReleaseNotes": {
-   "doc_type": "release_note",
-   "label": "Release Notes",
-   "split_pages": false,
-   "max_pages": 300,
-   "model": "qwen3-vl:8b-instruct",
-   "rn_reader": {
-    "model": "qwen3-vl:8b-instruct",
-    "px": 1800,
-    "ocr_jobs": 4
-   }
-  },
-  "OtherDocuments": {
-   "doc_type": "other_doc",
-   "label": "Other Documents",
-   "model": "qwen2.5vl:7b",
-   "_note": "filled by od_sort.py only (not read by the worker: flags/process_off_OtherDocuments)"
-  },
-  "SalesQuotes": {
-   "doc_type": "sales_quote",
-   "label": "Sales Quotes",
-   "model": "qwen2.5vl:7b",
-   "_note": "filled by route_sort.py only (not read by the worker: flags/process_off_SalesQuotes)"
-  },
-  "RoninJobTransfers": {
-   "doc_type": "jt",
-   "label": "Ronin Job Transfers",
-   "_note": "Ronin Flanges & Fittings job transfers (DF#####), Dino 29 Oct 2026: NAS Chronoscan\\JTs Ronin -> AR - Ronin JTs library (StockControl). Same JT reader as JobTransfers with jt_prompt_ronin.txt; the number keeps its DF.",
-   "split_pages": true,
-   "max_pages": 1,
-   "command": null,
-   "company": "Ronin",
-   "hold_unless": [
-    {
-     "jt_number": "^DF\\d{5}$"
-    }
-   ],
-   "jt_reader": {
-    "prompt": "jt_prompt_ronin.txt",
-    "number_prefix": "DF"
-   }
-  },
-  "CustomerOrders": {
-   "doc_type": "customer_order",
-   "label": "Customer Orders",
-   "_note": "Customer POs, Dino 30 Oct 2026: NAS Chronoscan\\MPS Orders -> Customer Orders library (MPS Sales) + MPSBusiness docs.CustomerOrder (D260) -> Evolution sales order import sheets. CPU first (OCR, job sticker, VAT -> account, lines), the vision model only for orders whose lines don't add up. Read ~2.5 h after the scan so Job File has the job (order no., value, FILE HANDED) for the cross-checks.",
-   "cpu_first": true,
-   "max_pages": 30,
-   "command": null,
-   "min_age_seconds": 9000,
-   "co_reader": {
-    "gpu_model": "qwen2.5vl:7b",
-    "gpu_px": 1600,
-    "gpu_max_pages": 4,
-    "ocr_jobs": 2
-   }
-  }
- },
- "dashboard": {
-  "bind": "0.0.0.0",
-  "port": 8090,
-  "session_hours": 12,
-  "password_hash": "pbkdf2_sha256$260000$eb44dd848a7720b3e994aef380f3148e$1cfb2ccd3009f70db327f73c578ec38b13efe53a4339a875b086654bc9f15270",
-  "services": [
-   "mps-ocr-worker",
-   "mps-ocr-collector"
-  ]
- },
- "px": 1600,
- "_note_px_ctx": "review F13 (28 Oct): the generic extractor renders at px 1600 (was dpi 200) and uses num_ctx 49152 like the readers, so Ollama never reloads a model for a different context",
- "repo": "/srv/ocr/pipeline",
- "cpu_lane": true,
- "queue_batch": 10,
- "_note_332": "29 Oct 2026 (Dino): cpu_lane - mps-ocr-cpu-worker reads delivery notes and the CPU pass of CPU-first invoices beside the GPU worker; queue_batch - after that many documents in a row, another queue read with the same model that has files waiting gets its turn"
+  "px": 1600,
+  "_note_px_ctx": "review F13 (28 Oct): the generic extractor renders at px 1600 (was dpi 200) and uses num_ctx 49152 like the readers, so Ollama never reloads a model for a different context",
+  "repo": "/srv/ocr/pipeline",
+  "cpu_lane": true,
+  "queue_batch": 10,
+  "_note_332": "29 Oct 2026 (Dino): cpu_lane - mps-ocr-cpu-worker reads delivery notes and the CPU pass of CPU-first invoices beside the GPU worker; queue_batch - after that many documents in a row, another queue read with the same model that has files waiting gets its turn"
 }
