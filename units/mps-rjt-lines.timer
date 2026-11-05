@@ -1,0 +1,9 @@
+[Unit]
+Description=MPS Ronin JT lines training sheet: every evening after the PC export, and Saturday before training
+[Timer]
+OnCalendar=*-*-* 20:20:00
+OnCalendar=Sat *-*-* 16:35:00
+Persistent=true
+Unit=mps-rjt-lines.service
+[Install]
+WantedBy=timers.target
