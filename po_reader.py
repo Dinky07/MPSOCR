@@ -144,7 +144,9 @@ def file_supplier(base):
     """Supplier typed into the scan's file name ("NUVO RUBBER-PLS2200-POLYMER-...", "PO7032-PL8239-STONCOR-POLYMER"):
     the name next to an order number. None when the name doesn't follow that pattern."""
     segs = [x.strip() for x in os.path.splitext(re.sub(r"^[A-Z]+__", "", base.upper()))[0].split("-")]
-    segs = [x for x in segs if not re.fullmatch(r"KUSASA|PAGE\s*\d*|P\s*\d+", x)]        # 503
+    segs = [re.sub(r"^KUSASA\s+(?=\S)(?!APP\b|AMEND)", "", x) for x in segs]                 # 505: "KUSASA FLOTEK" -> FLOTEK
+    segs = [x for x in segs if not re.fullmatch(r"KUSASA(\s*(APP|AMENDMENTS?))?|KUSASAAPP|PAGE\s*\d*|P\s*\d+|ALAC|LINERS|"
+                                                r"PROCESS\s*ORDER|IVOR\s*CRABBIA|APP", x)]                  # 503 / 505
     for i, x in enumerate(segs):
         if _ORDER_TOKEN.match(x) or len(re.sub(r"[^A-Z]", "", x)) < 2:
             continue
@@ -271,6 +273,21 @@ EXAMPLE_NUMBERS = {"A80532", "PL7512", "DF2914", "A84403", "16013"}     # prompt
 _SUPPLIERS = None
 
 
+def _canonical_supplier(name):
+    """505: the list's own name for a supplier typed in a file name (verified suppliers first, then Sage), else as typed."""
+    norm = lambda v: re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
+    n = norm(name)
+    _known_supplier(name)
+    for full in _SUPPLIER_NAMES:
+        k = norm(full)
+        if len(k) >= 4 and (n == k or n in k or k in n):
+            return full
+    return name
+
+
+_SUPPLIER_NAMES = []
+
+
 def _known_supplier(name):
     """502: a supplier MPS buys from - training/suppliers_verified.json ("all") or the Sage list (suppliers.csv)."""
     global _SUPPLIERS
@@ -281,12 +298,14 @@ def _known_supplier(name):
         try:
             for x in json.load(open(root + "/training/suppliers_verified.json", encoding="utf-8")).get("all") or []:
                 _SUPPLIERS.add(norm(x if isinstance(x, str) else (x.get("name") or x.get("supplier"))))
+                _SUPPLIER_NAMES.append(x if isinstance(x, str) else (x.get("name") or x.get("supplier")))
         except Exception:
             pass
         try:
             import csv
             for r in csv.DictReader(open(root + "/suppliers.csv", encoding="utf-8-sig")):
                 _SUPPLIERS.add(norm(r.get("Name")))
+                _SUPPLIER_NAMES.append(r.get("Name"))
         except Exception:
             pass
         _SUPPLIERS = {x for x in _SUPPLIERS if len(x) >= 4}
@@ -374,7 +393,7 @@ def tidy(d, rel, source_folder=None, source_pdf=None, source_modified=None, sour
             chk.append(f"supplier not read: {fsup} taken from the file name")
         elif not (k1 in k2 or k2 in k1):
             if _known_supplier(fsup):                    # 503: typed when scanned, and a supplier MPSBusiness knows
-                d["supplier_read"], d["supplier"], d["supplier_from_name"] = d["supplier"], fsup, True
+                d["supplier_read"], d["supplier"], d["supplier_from_name"] = d["supplier"], _canonical_supplier(fsup), True
             else:
                 chk.append(f"file name says supplier {fsup}")
         d["supplier_file"] = fsup
