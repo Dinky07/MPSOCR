@@ -119,10 +119,16 @@ def rescue(path, pages, ollama_url, model, family=None, timeout=1200, keep_alive
             a2 = read_page(path, q["page"], ollama_url, model, "", family, RESCUE_PX, hint, timeout, keep_alive,
                            extra=RESCUE_ASK, turn=deg)
             way = "osd" if deg is None else deg
+            if isinstance(a2, dict) and a2.get("page_type") in CERT_TYPES:
+                if a.get("page_type") in CERT_TYPES and (a.get("items") or a.get("heats")):
+                    # 528: the first reading had items or heats: keep it, take only what it lacked (518's test: a
+                    # whole second reading found the heats but changed a right pipe size)
+                    a2 = dict(a, items=a.get("items") or a2.get("items") or [], heats=a.get("heats") or a2.get("heats") or [])
+                else:
+                    for k in _HEADER:
+                        if not a2.get(k) and a.get(k):
+                            a2[k] = a[k]
             if isinstance(a2, dict) and a2.get("page_type") in CERT_TYPES and _found(a2) > _found(a):
-                for k in _HEADER:
-                    if not a2.get(k) and a.get(k):
-                        a2[k] = a[k]
                 q["answer"], q["how"] = a2, q["how"] + f"+rescue (turn {way}, {RESCUE_PX} px)"
             else:
                 q["how"] += f"+rescue tried (turn {way}: no more found)"
