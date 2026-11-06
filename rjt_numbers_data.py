@@ -66,10 +66,13 @@ def main():
         if not all(yes(r[I["Use"]]) for r in rs):
             skipped += 1
             continue
-        lines = [{"qty": num(r[I["Qty FINAL"]]), "code": r[I["Code FINAL"]], "desc": r[I["Description read"]] or r[I["Description captured"]]} for r in rs]
-        main = [{"qty": num(r[I["Qty read"]]), "item_no": r[I["Code read"]], "item": r[I["Description read"]]} for r in rs if r[I["Status"]] != "sheet only"]
+        fd, cw = I.get("Description FINAL"), I.get("Code written")           # 583: lines read by eye (status checked)
+        lines = [{"qty": num(r[I["Qty FINAL"]]), "code": r[I["Code FINAL"]],
+                  "desc": (r[fd] if fd is not None else None) or r[I["Description read"]] or r[I["Description captured"]]} for r in rs]
+        main = [{"qty": num(r[I["Qty read"]]), "item_no": r[I["Code read"]], "item": r[I["Description read"]]} for r in rs
+                if r[I["Status"]] not in ("sheet only", "checked, not read")]
         e = {"hash": h, "jt": rs[0][I["JT"]], "pdf": str(ROOT / str(rs[0][I["Ref"]]).replace("\\", "/")), "lines": lines, "main": main,
-             "code_written": [r[I["Status"]] != "no code written" for r in rs]}
+             "code_written": [(yes(r[cw]) if cw is not None and str(r[I["Status"]] or "").startswith("checked") else r[I["Status"]] != "no code written") for r in rs]}
         (tests if T.is_test(h) else train).append(e)
     tests = sorted(tests, key=lambda e: e["hash"])[: a.test_max or None]
     print(f"{len(jts)} JTs in the sheet: {len(train)} train, {len(tests)} test, {skipped} not all lines Use = Y", flush=True)
