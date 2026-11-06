@@ -28,7 +28,7 @@ except Exception:                          # pragma: no cover
 
 FEWSHOT_DIR = os.path.join(HERE, "tc_fewshot")
 NUM_PREDICT = 6144
-FAMILIES = ("Pipe", "Flanges", "Fittings", "Mixed", "Other")
+FAMILIES = ("Pipe", "Flanges", "Fittings", "Plate", "Mixed", "Other")          # 532: Plate
 
 PROMPT = '''You are reading ONE PAGE of a file of steel test certificates bought by Mining Pressure Systems (MPS) or
 Ronin, South Africa: pipe, flanges and pipe fittings (elbows/bends, tees, reducers, caps, stub ends).
@@ -701,7 +701,34 @@ def family_of_product(p, description=""):
         return "Fittings"
     if _FAM_PIPE.search(t):
         return "Pipe"
+    if _FAM_PLATE.search(t):
+        return "Plate"                                     # 532
     return None
+
+
+_FAM_PLATE = re.compile(r"PLATE|中厚板|钢板")
+
+
+def plate_of_size(size_text):
+    """532: "16*2400*12000", "04000 X 2000 X 080.000": thickness x width x length with a round plate width -> Plate.
+    A pipe's OD x WT x length is not (1016 x 10 x 11800: 1016 is no round width)."""
+    m = _PLATE_SIZE.match(str(size_text or "").upper())
+    xs = sorted(float(x) for x in m.groups()) if m else []
+    if len(xs) == 3 and xs[0] <= 300 and 900 <= xs[1] <= 3500 and xs[1] % 50 == 0 and xs[2] >= xs[1]:
+        return "Plate"
+    return None
+
+
+_PLATE_SIZE = re.compile(r"\s*(\d+(?:\.\d+)?)\s*(?:MM)?\s*[A-Z]?\s*[X×*-]\s*(\d+(?:\.\d+)?)\s*(?:MM)?\s*[X×*-]\s*(\d+(?:\.\d+)?)\s*(?:MM|M)?\s*$")
+
+
+def item_family(it, family_hint=None):
+    """532: an item line's family: its words; a plate size makes a line Plate unless its description says pipe (the
+    reader often calls a plate line "Pipe"); else the old library's family."""
+    pf, ps = family_of_product(it.get("product"), it.get("description")), plate_of_size(it.get("size_text"))
+    if ps and pf in (None, "Pipe") and not _FAM_PIPE.search(str(it.get("description") or "").upper()):
+        return ps
+    return pf or (family_hint if family_hint in ("Pipe", "Flanges", "Fittings") else None)
 
 
 _SPEC_FAM = (("Pipe", re.compile(r"A\s*-?\s*(?:106|53|333|312|790)\b|API\s*-?\s*5L|\b5L\b|SANS\s*(?:62|719|657)\b|"
@@ -897,8 +924,7 @@ def to_fields(d, source_name="", family_hint=None):
             m = re.search(r"\b(SCH(?:ED)?\.?\s*\d{2,3}|XXS|XS|STD)\b", u)
             m2 = re.match(r"\s*\d{2,4}(?:\.\d+)?\s*(?:MM|OD)?\s*[X*×]\s*(\d{1,2}(?:\.\d{1,2})?)(?!\d)", u)
             sch = norm_sch(m.group(1)) if m else (norm_sch(m2.group(1)) if m2 else None)
-        fam = family_of_product(it.get("product"), it.get("description")) or (
-            family_hint if family_hint in ("Pipe", "Flanges", "Fittings") else None)
+        fam = item_family(it, family_hint)                 # 532: plate by its size
         items.append({"#": n, "family": fam, "product": _clean(it.get("product")), "description": _clean(it.get("description")),
                       "size_nb": nb, "size2_nb": norm_nb(it.get("size2_text")), "size_text": size_text, "od_mm": od,
                       "schedule": sch, "schedule_names": sorted(sch_names_for(nb, sch)) or None,
@@ -915,6 +941,8 @@ def to_fields(d, source_name="", family_hint=None):
     f["family"] = (fams.pop() if len(fams) == 1 else "Mixed" if len(fams) > 1 else
                    family_hint if family_hint in FAMILIES else
                    (items and family_of_spec(f.get("standard"), f.get("grade"), items=items)) or "Other")    # 531: its standard / grade
+    if f["family"] == "Other" and items and "ARCELOR" in str(f.get("mill") or "").upper():
+        f["family"] = "Pipe"                               # 532 (Dino): ArcelorMittal certs are plate or pipe
     if family_hint and f["family"] not in (family_hint, "Mixed") and items:
         chk.append(f"family read as {f['family']}; the old library said {family_hint}")
 
@@ -1068,7 +1096,7 @@ def recompute(f):
         if i.get("heat_no"):
             i["heat_no"] = norm_heat(i["heat_no"])
     f["items"], f["heats"] = items, heats
-    fams = {i.get("family") for i in items if i.get("family") in ("Pipe", "Flanges", "Fittings")}
+    fams = {i.get("family") for i in items if i.get("family") in ("Pipe", "Flanges", "Fittings", "Plate")}       # 532
     if fams:
         f["family"] = fams.pop() if len(fams) == 1 else "Mixed"
     f["heats_text"] = "; ".join(str(h.get("heat_no")) for h in heats if h.get("heat_no")) or \
@@ -1138,27 +1166,63 @@ def split_certs(pages):
     appear. A cert page with a number starts that cert's group or joins it again; a page without one stays with the
     page before it; pages before the first numbered page go with the first cert. Numbers must match exactly once
     normalised (I/L/O read as 1/1/0): neighbouring certs are often numbered one apart."""
-    groups, order, cur, lead, numbered = {}, [], None, [], 0
+    groups, order, cur, lead, numbered, mills, anon = {}, [], None, [], 0, {}, 0
     for p in pages:
         if not p.get("page"):
             continue
         a = p.get("answer") or {}
-        k = _cert_key(a.get("cert_no")) if a.get("page_type") in CERT_TYPES else None
+        cert = a.get("page_type") in CERT_TYPES
+        k = _cert_key(a.get("cert_no")) if cert else None
         if k and k in {_HKEY(o.get("value") if isinstance(o, dict) else o).translate(_ILO) for o in a.get("order_numbers") or []}:
             k = None                                      # 506: the page's order number read into the cert number box
         numbered += bool(k)
+        mk = _mill_key(a.get("mill")) if cert else None
         if k:
             if k not in groups:
-                groups[k] = []
-                order.append(k)
+                if cur and cur.startswith("#") and (not mills.get(cur) or not mk or _same_mill(mk, mills[cur])):
+                    groups[k] = groups.pop(cur)           # 532: the unnumbered pages before it are its own
+                    order[order.index(cur)] = k
+                    if cur in mills:
+                        mills[k] = mills.pop(cur)
+                else:
+                    groups[k] = []
+                    order.append(k)
             cur = k
+        elif mk and (cur is None or (mills.get(cur) and not _same_mill(mk, mills[cur]))):
+            anon += 1                                     # 532: no number of its own, another mill: another cert
+            cur = f"#{anon}"
+            groups[cur] = []
+            order.append(cur)
+        if cur and mk and cur not in mills:
+            mills[cur] = mk
         (groups[cur] if cur else lead).append(p["page"])
-    if not order or 2 * numbered < sum(1 for p in pages if _header_page(p)):
+    if not numbered or 2 * numbered < sum(1 for p in pages if _header_page(p)):
         return _split_by_header(pages)                    # 506: no numbers, or too few to group by
     if len(order) == 1:
         return [[p["page"] for p in pages if p.get("page")]]
     groups[order[0]] = lead + groups[order[0]]
     return [sorted(groups[k]) for k in order]
+
+
+_MILL_SKIP = {"STEEL", "STEELS", "CO", "LTD", "LIMITED", "COMPANY", "GROUP", "IRON", "AND", "THE", "SOUTH", "AFRICA",
+              "PTY", "INC", "CORP", "CORPORATION", "INTERNATIONAL", "INDUSTRIAL", "INDUSTRY", "INDUSTRIES", "MILL", "WORKS",
+              "SPECIAL", "HIGH", "PRESSURE", "PIPE", "TUBE", "FLANGE", "FITTING", "PRODUCTS", "MANUFACTURING", "LIM"}
+
+
+def _mill_key(v):
+    """532: the distinctive words of a mill's name ("ArcelorMittal South Africa Lim" -> {ARCELORMITTAL})."""
+    toks = {t for t in re.findall(r"[A-Z]{3,}|[\u4e00-\u9fff]{2,}", str(_clean(v) or "").upper()) if t not in _MILL_SKIP}
+    return frozenset(toks) or None
+
+
+def _same_mill(a, b):
+    """532: two mill names are the same mill (misreads allowed); a name in Chinese and one in Latin letters can't be
+    told apart (鑫鹏源 / Xinpengyuan), so they count as the same."""
+    import difflib
+    cjk = lambda s: all(re.fullmatch(r"[\u4e00-\u9fff]+", t) for t in s)
+    if cjk(a) != cjk(b):
+        return True
+    return any(x == y or (len(x) >= 5 and len(y) >= 5 and difflib.SequenceMatcher(None, x, y).ratio() >= 0.8) for x in a for y in b)
 
 
 def _page_heats(a):
