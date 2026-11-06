@@ -24,6 +24,7 @@ LEDGER = ROOT / "work" / "tc_incomplete" / "held.csv"
 apply = "--apply" in sys.argv
 only_sideways = "--sideways" in sys.argv
 match = sys.argv[sys.argv.index("--match") + 1] if "--match" in sys.argv else None          # 535
+skip = sys.argv[sys.argv.index("--skip") + 1] if "--skip" in sys.argv else None             # 548
 
 
 def sideways(pdf):
@@ -45,6 +46,8 @@ for js in sorted(H.glob("*.json")):
         continue
     f = sc.get("fields") or {}
     if match and match not in js.name:                  # 535
+        continue
+    if skip and skip in js.name:                        # 548
         continue
     pdf = H / str(sc.get("file") or "")
     why = ("checked" if f.get("checked") else "edited by a person" if [e for e in sc.get("edits") or [] if "by" not in e] else
