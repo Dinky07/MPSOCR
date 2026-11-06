@@ -1,0 +1,14 @@
+[Unit]
+Description=MPS one-off (Dino 6 Nov): after the numbers A/B - Ronin JT numbers, JT LoRA 3 + 5 epochs, then all OCR back on (Thu 12 Nov 03:00 at the latest)
+OnFailure=mps-alert@%n.service
+After=network-online.target
+[Service]
+Type=simple
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ocr/scans
+ExecStart=/bin/bash /srv/ocr/pipeline/after_train.sh
+RuntimeMaxSec=140h
+KillMode=mixed
+TimeoutStopSec=120
+Nice=5

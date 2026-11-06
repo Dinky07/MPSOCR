@@ -51,8 +51,8 @@ trap resume EXIT
 trap 'say "stopped (signal)"; exit 1' INT TERM
 left() { echo $(( DEADLINE - $(date +%s) )); }
 unload() {
-    for m in $(curl -s $OLL/api/ps | python3 -c 'import json,sys;print(" ".join(x["name"] for x in json.load(sys.stdin).get("models",[])))'); do
-        curl -s $OLL/api/generate -d "{\"model\":\"$m\",\"keep_alive\":0}" >/dev/null && say "unloaded $m"
+    for m in $(curl -s -m 20 $OLL/api/ps | python3 -c 'import json,sys;print(" ".join(x["name"] for x in json.load(sys.stdin).get("models",[])))'); do
+        curl -s -m 60 $OLL/api/generate -d "{\"model\":\"$m\",\"keep_alive\":0}" >/dev/null && say "unloaded $m"
     done; sleep 5
 }
 state() { systemctl show -p ActiveState --value "$1" 2>/dev/null; }
