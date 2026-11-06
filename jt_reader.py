@@ -72,6 +72,45 @@ def fewshot_msgs(fewshot_dir, prompt=None):
     return msgs
 
 
+UPRIGHT_MIN_CONF = 2.0
+
+
+def upright(png):
+    """531: turn a sideways / upside-down page image upright in place (Tesseract OSD). Returns the degrees turned."""
+    try:
+        out = subprocess.run(["tesseract", png, "stdout", "--psm", "0"], capture_output=True, text=True, timeout=120).stdout
+        rot = re.search(r"Rotate:\s*(\d+)", out)
+        conf = re.search(r"Orientation confidence:\s*([\d.]+)", out)
+        deg = int(rot.group(1)) if rot else 0
+        if deg not in (90, 180, 270) or not conf or float(conf.group(1)) < UPRIGHT_MIN_CONF:
+            return 0
+        from PIL import Image
+        with Image.open(png) as im:
+            im.rotate(-deg, expand=True).save(png)
+        return deg
+    except Exception:
+        return 0
+
+
+def salvage(raw):
+    """531: an answer cut off part way (not JSON): the header and the line items read before the cut, or None."""
+    i = raw.find('"line_items"')
+    if i < 0:
+        return None
+    for j in range(len(raw) - 1, i, -1):
+        if raw[j] != "}":
+            continue
+        for tail in ("]}", "}]}", "]}}"):
+            try:
+                d = json.loads(raw[: j + 1] + tail)
+            except ValueError:
+                continue
+            if isinstance(d, dict) and isinstance(d.get("line_items"), list):
+                d["_salvaged"] = True
+                return d
+    return None
+
+
 def read(path, ollama_url, model="qwen2.5vl:7b", fewshot_dir=None, px=1600, timeout=900, keep_alive="30m", prompt=None):
     """(answer dict in ANSWER_SCHEMA, pages read, raw text). Page 1 only: a JT is a single page."""
     text = prompt_text(prompt)
@@ -87,15 +126,39 @@ def read(path, ollama_url, model="qwen2.5vl:7b", fewshot_dir=None, px=1600, time
             pngs = [p]
         if not pngs:
             raise RuntimeError("no pages could be rendered")
-        body = {"model": model, "stream": False, "format": ANSWER_SCHEMA, "keep_alive": keep_alive,
-                "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": NUM_PREDICT},
-                "messages": fewshot_msgs(fewshot_dir, text) + [{"role": "user", "content": text,
-                            "images": [base64.b64encode(open(pngs[0], "rb").read()).decode()]}]}
-        req = urllib.request.Request(ollama_url.rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = json.loads(r.read())["message"]["content"]
-    return tidy(parse_answer(raw)), 1, raw
+        turned = upright(pngs[0])                            # 531: upside-down scans read upright
+        img = base64.b64encode(open(pngs[0], "rb").read()).decode()
+
+        def ask(examples):
+            body = {"model": model, "stream": False, "format": ANSWER_SCHEMA, "keep_alive": keep_alive,
+                    "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": NUM_PREDICT},
+                    "messages": fewshot_msgs(examples, text) + [{"role": "user", "content": text, "images": [img]}]}
+            req = urllib.request.Request(ollama_url.rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read())["message"]["content"]
+
+        raw = ask(fewshot_dir)
+        try:
+            d = parse_answer(raw)
+        except (ValueError, RuntimeError):
+            d = None                                         # 531: not JSON - once more without the worked examples
+            if fewshot_dir:
+                raw2 = ask(None)
+                try:
+                    d, raw = parse_answer(raw2), raw2
+                except (ValueError, RuntimeError):
+                    pass
+            if d is None:
+                d = salvage(raw)
+            if d is None:
+                raise RuntimeError(f"model returned non-JSON twice: {raw[:200]!r}")
+    a = tidy(d)
+    if turned:
+        a["_turned_upright"] = turned
+    if d.get("_salvaged"):
+        a["_salvaged"] = True
+    return a, 1, raw
 
 
 def parse_answer(raw):

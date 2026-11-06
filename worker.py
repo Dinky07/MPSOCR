@@ -1467,7 +1467,9 @@ class Worker:
                                 int(self.cfg.get("ollama_timeout", 900)), self.cfg.get("keep_alive", "15m"),
                                 prompt=jc.get("prompt")), jc["fewshot_dir"], extra)
                             raw = jt_reader.to_worker(ans, jc.get("number_prefix"))
-                        except PageReadFailed as e:
+                            if ans.get("_salvaged"):            # 531: answer cut off; the lines before the cut kept
+                                extra["read_error"] = "answer cut off: the lines read before the cut are kept - check the rest"
+                        except (PageReadFailed, ValueError, RuntimeError) as e:     # 531: a page, not the whole scan
                             log.warning("%s %s%s could not be read (%s): held, the file's other pages are kept",
                                         folder, src.name, f" p{page}" if page else "", e)
                             ans, npages = {}, 1
