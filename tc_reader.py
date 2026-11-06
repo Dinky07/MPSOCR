@@ -686,15 +686,41 @@ def read(path, ollama_url, model="qwen2.5vl:7b", fewshot_dir=None, family=None, 
 
 
 # ------------------------------------------------------------------------------------------------ answer -> fields
+_FAM_FLG = re.compile(r"FLANGE|\bPLFF\b|\bSORF\b|\bWNRF\b|\bBLRF\b|BLIND|\bW/N\b|\bWN\b|\bS/O\b|WELD\s*NECK|SLIP\s*ON|"
+                      r"\bFLP\b|\b(?:WO|BLO|SO|WN|BL)FF\b|SANS\s*1123|BS\s*4504|EN\s*1092|STEEL\s*RINGS?\b")
+_FAM_FIT = re.compile(r"ELBOW|BEND|\bTEES?\b|REDUCER|\bCAP\b|STUB|FITTING|\bLR\b|\bSR\b|90\s*DEG|45\s*DEG|\bELB(?:LR|SR)?\b|"
+                      r"\b(?:CON|ECC)\.?\s*RED\b|\bRED\.?\s*(?:CON|ECC)\b|\bREDUC(?:ING|TION)\b|COUPLING|OLET\b|NIPPLE")
+_FAM_PIPE = re.compile(r"PIPE|TUBE|SMLS|SEAMLESS|ERW|LSAW")
+
+
 def family_of_product(p, description=""):
-    t = f"{p or ''} {description or ''}".upper()
-    if re.search(r"FLANGE|\bPLFF\b|\bSORF\b|\bWNRF\b|\bBLRF\b|BLIND", t):
+    t = f"{p or ''} {description or ''}".upper()          # 531: + the shorthand on MPS certs (see tc_family_patch.py)
+    if _FAM_FLG.search(t):
         return "Flanges"
-    if re.search(r"ELBOW|BEND|\bTEE\b|REDUCER|\bCAP\b|STUB|FITTING|\bLR\b|\bSR\b|90\s*DEG|45\s*DEG", t):
+    if _FAM_FIT.search(t):
         return "Fittings"
-    if re.search(r"PIPE|TUBE|SMLS|SEAMLESS|ERW|LSAW", t):
+    if _FAM_PIPE.search(t):
         return "Pipe"
     return None
+
+
+_SPEC_FAM = (("Pipe", re.compile(r"A\s*-?\s*(?:106|53|333|312|790)\b|API\s*-?\s*5L|\b5L\b|SANS\s*(?:62|719|657)\b|"
+                                 r"EN\s*1021[0679]\b|EN\s*1025[5]\b|EN\s*10208\b|BS\s*(?:1387|3601|3602)\b")),
+             ("Fittings", re.compile(r"A\s*-?\s*(?:234|403|420)\b|\bWP[BLC]\b|B\s*16\.(?:9|11|28)\b|MSS\s*-?\s*SP|EN\s*10253\b")),
+             ("Flanges", re.compile(r"B\s*16\.(?:5|47)\b|SANS\s*1123|BS\s*4504|EN\s*1092|\bBS\s*10\b")))
+
+
+_NOT_PFF = re.compile(r"PLATE|COIL|SHEET|STRIP|\bBARS?\b|\bROD\b|BEAM|ANGLE|CHANNEL|BILLET|中厚板|钢板|卷")
+
+
+def family_of_spec(*texts, items=()):
+    """531: the family a cert's standard / grade names (A106 / API 5L pipe, A234 fittings, B16.5 flanges), if one; none
+    for a cert of plate, coil, bar ... (X42 coil is not pipe)."""
+    if any(_NOT_PFF.search(f"{i.get('product') or ''} {i.get('description') or ''}".upper()) for i in items if isinstance(i, dict)):
+        return None
+    t = " ".join(str(x) for x in texts if x).upper().replace("ASTM", " ")
+    fams = {fam for fam, rx in _SPEC_FAM if rx.search(t)}
+    return fams.pop() if len(fams) == 1 else None
 
 
 # upper end of a plausible result (%), to tell a printed "19" under "C *100" (0.19) from a printed 0.20 under it
@@ -887,7 +913,8 @@ def to_fields(d, source_name="", family_hint=None):
     # family
     fams = {i["family"] for i in items if i["family"]}
     f["family"] = (fams.pop() if len(fams) == 1 else "Mixed" if len(fams) > 1 else
-                   family_hint if family_hint in FAMILIES else "Other")
+                   family_hint if family_hint in FAMILIES else
+                   (items and family_of_spec(f.get("standard"), f.get("grade"), items=items)) or "Other")    # 531: its standard / grade
     if family_hint and f["family"] not in (family_hint, "Mixed") and items:
         chk.append(f"family read as {f['family']}; the old library said {family_hint}")
 
