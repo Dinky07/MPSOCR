@@ -380,11 +380,11 @@ def queue_state(cfg):
     timers = sorted(set(re.findall(r"(mps-[\w@.-]+\.timer)", out2))) if rc2 == 0 else []
     if units or timers:
         rc3, out3, _ = run(["systemctl", "show", *units, *timers, "-p", "Id", "-p", "Description", "-p", "ActiveEnterTimestamp",
-                            "-p", "NextElapseUSecRealtime", "-p", "Unit"], 20)
+                            "-p", "NextElapseUSecRealtime", "-p", "Unit", "-p", "Type"], 20)
         for block in out3.strip().split("\n\n") if rc3 == 0 else []:
             kv = dict(l.split("=", 1) for l in block.splitlines() if "=" in l)
             uid = kv.get("Id", "")
-            if uid.endswith(".service"):
+            if uid.endswith(".service") and kv.get("Type") == "oneshot":    # always-on services are not jobs
                 running.append({"unit": uid[:-8], "what": kv.get("Description", ""), "since": kv.get("ActiveEnterTimestamp", "")})
             elif uid.endswith(".timer") and kv.get("NextElapseUSecRealtime"):
                 try:
@@ -417,6 +417,8 @@ def queue_state(cfg):
                                    "since_s": round(time.time() - e.stat().st_ctime)})
     except FileNotFoundError:
         pass
+    live = {r["name"] for r in runners if r["state"] == "running"}
+    runners = [r for r in runners if r["state"] == "running" or r["name"] not in live]
     return {"files": files, "files_total": total_n, "eta_total_s": total_s or None, "secs_each": round(overall, 1) if overall else None,
             "running": running, "upcoming": upcoming[:12], "runners": runners[:12]}
 
