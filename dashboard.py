@@ -1233,6 +1233,90 @@ def _complete_job(root, side, f):
     side["flags"] = [x for x in (side.get("flags") or []) if not (str(x).startswith("check: ") and is_job(str(x)[7:]))] + ["check: " + c for c in chk]
 
 
+HEAT_EL = ("C", "Si", "Mn", "P", "S", "Cr", "Ni", "Mo", "Cu", "V", "Ceq")
+HEAT_MECH = ("yield_mpa", "tensile_mpa", "elongation_pct", "hardness")
+_HEAT_CHK = re.compile(r"^heat .+?: (?:\S+ \S+ % is implausible|yield .* >= tensile|no chemistry read)")
+
+
+def _heat_num(k, v):
+    v = "" if v is None else str(v).strip().replace(",", ".")
+    if v == "":
+        return None
+    n = _num(v)
+    if n is None:
+        raise ValueError(f"{k}: '{v}' is not a number")
+    return n
+
+
+def _edit_heats(old, rows):
+    """553: the heats table as saved -> the new heats list. A row carries "_i" (its index in the old list, "" for a
+    new heat); elements and tests it does not show are kept."""
+    new = []
+    for row in rows:
+        i = str(row.get("_i") or "")
+        base = json.loads(json.dumps(old[int(i)])) if i.isdigit() and int(i) < len(old) else \
+            {"heat_no": None, "grade": None, "chem": {}, "mech": [], "pages": []}
+        hn = str(row.get("heat_no") or "").strip()
+        if not hn and not any(str(row.get(k) or "").strip() for k in HEAT_EL + HEAT_MECH + ("grade",)):
+            continue
+        base["heat_no"] = (tc_reader.norm_heat(hn) if tc_reader and hn else hn) or None
+        base["grade"] = str(row.get("grade") or "").strip() or None
+        ch = base.get("chem") if isinstance(base.get("chem"), dict) else {}
+        for el in HEAT_EL:
+            if el in row:
+                v = _heat_num(el, row[el])
+                if v is None:
+                    ch.pop(el, None)
+                else:
+                    ch[el] = v
+        base["chem"] = ch
+        mech = base.get("mech") if isinstance(base.get("mech"), list) else []
+        if any(k in row for k in HEAT_MECH):
+            m0 = mech[0] if mech else {"yield_mpa": None, "tensile_mpa": None, "elongation_pct": None, "hardness": None,
+                                       "impact_j": None, "item_line": None}
+            for k in HEAT_MECH:
+                if k in row:
+                    m0[k] = (str(row[k] or "").strip() or None) if k == "hardness" else _heat_num(k, row[k])
+            if not mech and any(m0.get(k) not in (None, "") for k in HEAT_MECH):
+                mech.append(m0)
+        base["mech"] = mech
+        new.append(base)
+    return new
+
+
+def _heat_diff(old, new):
+    """553: {"607125 Mn": 0.04}, {"607125 Mn": 0.51} for the edit log ({} when nothing changed)."""
+    flat = lambda hs: {f"{h.get('heat_no')} {k}": v for h in hs
+                       for k, v in list((h.get("chem") or {}).items()) + list(((h.get("mech") or [{}])[0] or {}).items())
+                       + [("grade", h.get("grade"))] if v not in (None, "") and k not in ("impact_j", "item_line")}
+    a, b = flat(old), flat(new)
+    o = {k: a.get(k) for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)}
+    n = {k: b.get(k) for k in o}
+    hk = lambda hs: [h.get("heat_no") for h in hs]
+    if hk(old) != hk(new):
+        o["heats"], n["heats"] = hk(old), hk(new)
+    return o, n
+
+
+def _heat_checks(side, f):
+    """553: the reader's chemistry / yield-vs-tensile review checks, redone after the heats were edited."""
+    add = []
+    for h in f.get("heats") or []:
+        c = h.get("chem") or {}
+        if not c:
+            add.append(f"heat {h.get('heat_no')}: no chemistry read")
+        for el, lim in (("C", 0.5), ("Mn", 2.5), ("P", 0.1), ("S", 0.1), ("Si", 1.5)):
+            if isinstance(c.get(el), (int, float)) and c[el] > lim:
+                add.append(f"heat {h.get('heat_no')}: {el} {c[el]} % is implausible (> {lim}) - check the factor")
+        for m in h.get("mech") or []:
+            if m.get("yield_mpa") and m.get("tensile_mpa") and m["yield_mpa"] >= m["tensile_mpa"]:
+                add.append(f"heat {h.get('heat_no')}: yield {m['yield_mpa']} >= tensile {m['tensile_mpa']}")
+    f["checks"] = [c for c in (f.get("checks") or []) if not _HEAT_CHK.match(str(c))] + add
+    f["review"] = "; ".join(f["checks"]) or None
+    side["flags"] = [x for x in (side.get("flags") or []) if not (str(x).startswith("check: ") and _HEAT_CHK.match(str(x)[7:]))] \
+        + ["check: " + c for c in add]
+
+
 def edit_doc(root, t, body):
     """Save corrections from the dashboard into the sidecar (before sync), with a log of what changed. Renames the
     PDF + JSON when the library file name changes (supplier, order number, date)."""
@@ -1275,14 +1359,25 @@ def edit_doc(root, t, body):
         if sig(new_items) != sig(old_items):
             changes.append({"field": "items", "old": len(old_items), "new": len(new_items)})
             f["items"] = new_items
+    heats_edited = False
+    if body.get("heats") is not None and dt == "test_cert":          # 553: chemistry and mechanicals
+        old_h = [h for h in (f.get("heats") or []) if isinstance(h, dict)]
+        new_h = _edit_heats(old_h, body["heats"])
+        o, n = _heat_diff(old_h, new_h)
+        if o:
+            changes.append({"field": "heats", "old": o, "new": n})
+            f["heats"], heats_edited = new_h, True
     if not changes:
         return {"ok": True, "changed": 0}
     _recompute(dt, f)
+    if heats_edited:
+        _heat_checks(side, f)
     # flags that the edit has answered
     flags = [x for x in (side.get("flags") or [])
              if not (x.startswith("missing_") and f.get(x[8:]) not in (None, "")) and x not in ("no_po", "cancelled")
              and not (dt == "ws" and ((x == "no_lines" and f.get("items")) or (x == "missing_sheet" and f.get("sheet_no"))))
-             and not (dt == "test_cert" and ((x == "no_items" and f.get("items")) or (x == "family_other" and f.get("family") not in (None, "", "Other"))))]
+             and not (dt == "test_cert" and ((x == "no_items" and f.get("items")) or (x == "family_other" and f.get("family") not in (None, "", "Other"))
+                                             or (x == "no_heats" and f.get("heats"))))]
     if dt == "po" and f.get("cancelled"):
         flags.insert(0, "cancelled")
     side["flags"], side["needs_review"] = flags, bool(flags)
@@ -2207,6 +2302,8 @@ table.lines.lt-test_cert input[data-c=size_nb],table.lines.lt-test_cert input[da
 table.lines.lt-test_cert input[data-c=schedule],table.lines.lt-test_cert input[data-c=class]{width:calc(8ch + 14px)}
 table.lines.lt-test_cert input[data-c=grade]{width:calc(11ch + 14px)}
 table.lines.lt-test_cert input[data-c=heat_no]{width:calc(14ch + 14px)}
+table.lines.heats input{width:calc(7ch + 14px)}
+table.lines.heats input[data-h=heat_no],table.lines.heats input[data-h=grade]{width:calc(13ch + 14px)}
 .editbar .grow{flex:1}
 .tag.edited{color:var(--accent);border-color:var(--accent)}
 table.q td.tickc{text-align:center}
@@ -2680,11 +2777,18 @@ function reviewHtml(x){
   it=it.map(s=>s.trim()).filter(Boolean);
   if(!it.length)return "";
   return `<div class="rv"><div class="sec">Review checks (${it.length})</div><div class="sp small" style="white-space:pre-wrap">${esc(it.join("\n"))}</div></div>`}
-function heatsHtml(x){
+const HEAT_EL=["C","Si","Mn","P","S","Cr","Ni","Mo","Cu","V","Ceq"];
+function heatRow(r,n){            // 553: one editable heat
+  const c=r.chem||{},m=(r.mech||[])[0]||{};
+  const inp=(k,v,num)=>`<td class="${num?"num":""}"><input data-h="${k}" value="${esc(v??"")}" ${num?'inputmode="decimal" style="text-align:right"':""}></td>`;
+  return `<tr data-heat="${n}">${inp("heat_no",r.heat_no)}${inp("grade",r.grade)}${HEAT_EL.map(e=>inp(e,c[e],1)).join("")}${inp("yield_mpa",m.yield_mpa,1)}${inp("tensile_mpa",m.tensile_mpa,1)}${inp("elongation_pct",m.elongation_pct,1)}${inp("hardness",m.hardness)}<td class="num">${(r.mech||[]).length}</td><td><button data-act="delheat" title="remove this heat">✕</button></td></tr>`}
+function heatsHtml(x,ed){
   if(x.doc_type!="test_cert")return "";
   const f=x.fields||{},hs=f.heats||[],EL=["C","Si","Mn","P","S","Cr","Ni","Mo","Cu","V"];
-  let h=`<div class="sec">Heats: chemistry and mechanicals <span class="muted small">(read-only; one row per heat, first test shown)</span></div>`;
-  if(!hs.length)h+=`<div class="small muted">No heats were read.</div>`;
+  let h=`<div class="sec">Heats: chemistry and mechanicals <span class="muted small">(${ed?"chemistry in %, as on the certificate after its factors; yield / tensile / elongation / hardness are the first test":"one row per heat, first test shown"})</span></div>`;
+  if(ed)h+=`<div class="scroll"><table class="lines heats"><thead><tr><th>Heat no</th><th>Grade</th>${HEAT_EL.map(e=>`<th class="num">${e}</th>`).join("")}<th class="num">Yield MPa</th><th class="num">Tensile MPa</th><th class="num">El %</th><th>Hardness</th><th class="num">Tests</th><th></th></tr></thead><tbody>
+    ${hs.map((r,n)=>heatRow(r,n)).join("")}</tbody></table></div><button data-act="addheat" style="margin-top:6px">+ Add heat</button>`;
+  else if(!hs.length)h+=`<div class="small muted">No heats were read.</div>`;
   else h+=`<div class="scroll"><table class="lines"><thead><tr><th>Heat no</th><th>Grade</th>${EL.map(e=>`<th class="num">${e}</th>`).join("")}<th class="num">Ceq</th><th class="num">Yield MPa</th><th class="num">Tensile MPa</th><th class="num">El %</th><th class="num">Tests</th></tr></thead><tbody>
     ${hs.map(r=>{const c=r.chem||{},m=(r.mech||[])[0]||{};return `<tr><td>${esc(r.heat_no??"")}</td><td>${esc(r.grade??"")}</td>${EL.map(e=>`<td class="num">${esc(c[e]??"")}</td>`).join("")}<td class="num">${esc(c.Ceq??"")}</td>
       <td class="num">${esc(m.yield_mpa??"")}</td><td class="num">${esc(m.tensile_mpa??"")}</td><td class="num">${esc(m.elongation_pct??"")}</td><td class="num">${(r.mech||[]).length}</td></tr>`}).join("")}</tbody></table></div>`;
@@ -2752,7 +2856,7 @@ function docRows(t,list,held){
           ${headHtml(x,ed)}
         </div>
         <div>${sagePoHtml(x)}${sageHtml(x)}${spHtml(x,q0)}</div>
-        <div class="dl">${linesHtml(x,ed)}${heatsHtml(x)}</div>
+        <div class="dl">${linesHtml(x,ed)}${heatsHtml(x,ed)}</div>
         </div></td></tr>`}
     return r}).join("")}
 function syncStatus(d,ty){
@@ -2816,12 +2920,13 @@ $("#outq").addEventListener("click",async e=>{
     await act({action:"check",type:tk.dataset.type,name:tk.dataset.name,held:tk.dataset.held=="1",value:tk.checked},tk.checked?"Ticked as checked":"Tick removed");
     loadOut();return}
   const b=e.target.closest("button[data-act]");
-  if(b&&["edit","save","cancel","addline","delline"].includes(b.dataset.act)){
+  if(b&&["edit","save","cancel","addline","delline","addheat","delheat"].includes(b.dataset.act)){
     e.stopPropagation();const box=b.closest("[data-edit]"),a=b.dataset.act;
     if(a=="edit"){editing=box.dataset.edit;renderOut(true);return}
     if(a=="cancel"){editing=null;renderOut(true);return}
-    const tb=box.querySelector("table.lines tbody");
-    if(a=="delline"){b.closest("tr").remove();return}
+    const tb=box.querySelector("table.lines:not(.heats) tbody");
+    if(a=="delline"||a=="delheat"){b.closest("tr").remove();return}
+    if(a=="addheat"){const ht=box.querySelector("table.heats tbody");if(!ht)return;ht.insertAdjacentHTML("beforeend",heatRow({},""));ht.lastElementChild.querySelector("input")?.focus();return}
     if(a=="addline"){
       let t2=tb;if(!t2){toast("Save first, then add lines");return}
       const proto=t2.querySelector("tr[data-line]");const n=t2.querySelectorAll("tr[data-line]").length;
@@ -2833,8 +2938,10 @@ $("#outq").addEventListener("click",async e=>{
       const fields={};box.querySelectorAll("[data-f]").forEach(el=>fields[el.dataset.f]=el.value);
       let items=null;if(tb){items=[...tb.querySelectorAll("tr[data-line]")].map(tr=>{const o={};tr.querySelectorAll("[data-c]").forEach(el=>o[el.dataset.c]=el.value);return o})
         .filter(o=>Object.entries(o).some(([k,v])=>k!="price_unit"&&String(v).trim()))}
+      let heats=null;const ht=box.querySelector("table.heats tbody");
+      if(ht)heats=[...ht.querySelectorAll("tr[data-heat]")].map(tr=>{const o={_i:tr.dataset.heat};tr.querySelectorAll("[data-h]").forEach(el=>o[el.dataset.h]=el.value);return o});
       b.disabled=true;
-      await act({action:"edit",type:box.dataset.type,name:box.dataset.name,held:box.dataset.held=="1",fields,items},"Saved");
+      await act({action:"edit",type:box.dataset.type,name:box.dataset.name,held:box.dataset.held=="1",fields,items,heats},"Saved");
       editing=null;await loadOut();return}
   }
   if(b&&b.dataset.act=="delete"){e.stopPropagation();
