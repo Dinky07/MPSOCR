@@ -284,6 +284,7 @@ def rejoin(parts, stamp):
     md.mkdir(parents=True, exist_ok=True)
     first = parts[0][1]
     stem = re.sub(r'[\\/:*?"<>|#%]+', " ", Path(str(first.get("source_file") or parts[0][0].stem)).stem)[:100]
+    stem = re.sub(r"(?:-rejoin(?:ed)?(?:_\d+)?)+$", "", stem).strip() or stem          # 533: one "-rejoined", not one per round
     name, k = f"{stem}-rejoined.pdf", 2
     while (indir / name).exists() or (md / (name + ".json")).exists():
         name, k = f"{stem}-rejoined_{k}.pdf", k + 1

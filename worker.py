@@ -821,7 +821,7 @@ class Worker:
             if not ollama_up(self.cfg):
                 raise OllamaDown(errs[0].get("error") or "every page failed")
             raise RuntimeError("every page failed: " + str(errs[0].get("error"))[:300])
-        groups = tc_reader.split_certs(pages) if td is not None and hasattr(tc_reader, "split_certs") else []
+        groups = tc_reader.split_certs(pages) if td is not None and hasattr(tc_reader, "split_certs") and not meta.get("rejoined_from") else []   # 533: not a rejoined file
         if len(groups) > 1:                              # 500: one document per test certificate number
             out = []
             for i, g in enumerate(groups, 1):
