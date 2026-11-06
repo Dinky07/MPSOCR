@@ -107,10 +107,10 @@ say "train $NTRAIN / test $NTEST orders"
 
 if [ ! -e "$ROOT/PAUSE" ]; then echo "numbers A/B ($STAMP)" > "$ROOT/PAUSE"; MADE_PAUSE=1; say "worker paused"; fi
 guard_on
-# let the worker finish the file it is on (it stops between files: a 24-page test cert takes ~5 min), so it cannot load
-# Ollama again after the GPU is checked free
+# let the worker finish the file it is on (it stops between files: a 24-page test cert takes ~5 min, a 40-page JT scan
+# ~40 min), so it cannot load Ollama again after the GPU is checked free; up to 2 h
 sleep 30; w=0
-while [ "$(python3 -c "import json;print(json.load(open('$ROOT/status.json')).get('current'))" 2>/dev/null)" != None ] && [ $w -lt 2400 ]; do
+while [ "$(python3 -c "import json;print(json.load(open('$ROOT/status.json')).get('current'))" 2>/dev/null)" != None ] && [ $w -lt 7200 ]; do
     [ $((w % 300)) -eq 0 ] && say "waiting for the worker to finish its file"; sleep 20; w=$((w + 20))
 done
 
