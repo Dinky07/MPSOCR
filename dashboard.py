@@ -330,6 +330,97 @@ def alert_flags(root):
     return out
 
 
+# Dino 6 Nov: the Queue card. Long-running services are not "operations"; one-off and timer jobs are.
+QUEUE_DAEMONS = {"mps-ocr-worker", "mps-ocr-collector", "mps-ocr-dashboard"}
+
+
+def queue_state(cfg):
+    import statistics
+    root = Path(cfg["root"])
+    # the worker's pace: gaps between finished files, given to the type of the later file; median per type
+    gaps, allg = {}, []
+    try:
+        db = sqlite3.connect(f"file:{cfg.get('state_db', '/srv/ocr/pipeline/state.db')}?mode=ro", uri=True, timeout=5)
+        rows = list(db.execute("SELECT folder, at FROM processed ORDER BY at DESC LIMIT 300"))
+        db.close()
+        for (f1, a1), (_, a0) in zip(rows, rows[1:]):
+            try:
+                g = (datetime.fromisoformat(a1) - datetime.fromisoformat(a0)).total_seconds()
+            except (TypeError, ValueError):
+                continue
+            if 0 < g < 1800:                                  # a gap over 30 min is an idle spell, not a file
+                gaps.setdefault(f1, []).append(g)
+                allg.append(g)
+    except Exception:
+        pass
+    overall = statistics.median(allg) if allg else None
+    files, total_s, total_n = [], 0, 0
+    for t in cfg["doc_types"]:
+        d = root / "in" / t
+        try:
+            ents = [e for e in os.scandir(d) if e.is_file() and re.search(r"\.(pdf|jpe?g|png)$", e.name, re.I)
+                    and not e.name.startswith(("~$", "."))]
+        except FileNotFoundError:
+            continue
+        if not ents:
+            continue
+        ents.sort(key=lambda e: e.stat().st_mtime)
+        per = statistics.median(gaps[t]) if len(gaps.get(t) or []) >= 3 else overall
+        eta = round(per * len(ents)) if per else None
+        files.append({"type": t, "n": len(ents), "next": [e.name for e in ents[:5]], "secs_each": round(per, 1) if per else None,
+                      "eta_s": eta, "oldest_s": round(time.time() - ents[0].stat().st_mtime)})
+        total_n += len(ents)
+        total_s += eta or 0
+    # what is running now (not the daemons) and what is scheduled in the next 24 h
+    running, upcoming = [], []
+    rc, out, _ = run(["systemctl", "list-units", "mps-*", "--state=active,activating", "--plain", "--no-legend", "--no-pager"], 15)
+    units = [l.split()[0] for l in out.splitlines() if l.strip() and l.split()[0].endswith(".service")] if rc == 0 else []
+    units = [u for u in units if u[:-8].split("@")[0] not in QUEUE_DAEMONS]
+    rc2, out2, _ = run(["systemctl", "list-timers", "mps-*", "--all", "--plain", "--no-legend", "--no-pager"], 15)
+    timers = sorted(set(re.findall(r"(mps-[\w@.-]+\.timer)", out2))) if rc2 == 0 else []
+    if units or timers:
+        rc3, out3, _ = run(["systemctl", "show", *units, *timers, "-p", "Id", "-p", "Description", "-p", "ActiveEnterTimestamp",
+                            "-p", "NextElapseUSecRealtime", "-p", "Unit"], 20)
+        for block in out3.strip().split("\n\n") if rc3 == 0 else []:
+            kv = dict(l.split("=", 1) for l in block.splitlines() if "=" in l)
+            uid = kv.get("Id", "")
+            if uid.endswith(".service"):
+                running.append({"unit": uid[:-8], "what": kv.get("Description", ""), "since": kv.get("ActiveEnterTimestamp", "")})
+            elif uid.endswith(".timer") and kv.get("NextElapseUSecRealtime"):
+                try:
+                    nxt = datetime.strptime(" ".join(kv["NextElapseUSecRealtime"].split()[1:3]), "%Y-%m-%d %H:%M:%S")
+                except (ValueError, IndexError):
+                    continue
+                secs = (nxt - datetime.now()).total_seconds()
+                if 0 <= secs <= 86400:
+                    upcoming.append({"unit": kv.get("Unit", uid)[:-8] if kv.get("Unit") else uid[:-6], "what": kv.get("Description", ""),
+                                     "at": nxt.isoformat(timespec="minutes"), "in_s": round(secs)})
+    upcoming.sort(key=lambda u: u["in_s"])
+    # box runners: the one running now (a log without its .rc) and those waiting
+    rdir = root / "_src" / "run"
+    runners = []
+    try:
+        for e in sorted(os.scandir(rdir), key=lambda e: e.name):
+            if e.is_file() and re.match(r"^\d+-.*\.sh$", e.name):
+                first = ""
+                try:
+                    with open(e.path, encoding="utf-8", errors="replace") as fh:
+                        first = next((l[1:].strip() for l in fh if l.startswith("#") and not l.startswith("#!")), "")
+                except OSError:
+                    pass
+                runners.append({"name": e.name[:-3], "what": first[:160], "state": "waiting"})
+        done = rdir / "done"
+        logs = sorted((e for e in os.scandir(done) if e.name.endswith(".log")), key=lambda e: e.stat().st_mtime, reverse=True)[:3]
+        for e in logs:
+            if not (done / (e.name[:-4] + ".rc")).exists() and time.time() - e.stat().st_mtime < 6 * 3600:
+                runners.insert(0, {"name": e.name[:-4], "what": "", "state": "running",
+                                   "since_s": round(time.time() - e.stat().st_ctime)})
+    except FileNotFoundError:
+        pass
+    return {"files": files, "files_total": total_n, "eta_total_s": total_s or None, "secs_each": round(overall, 1) if overall else None,
+            "running": running, "upcoming": upcoming[:12], "runners": runners[:12]}
+
+
 def status(cfg):
     root = Path(cfg["root"])
     flags = root / "flags"
@@ -430,6 +521,7 @@ def status(cfg):
         "recent": recent,
         "disk": {"free_gb": round(du.free / 2**30, 1), "total_gb": round(du.total / 2**30, 1)},
         "storage": cached("storage", 60, storage_state, cfg),
+        "queue": cached("queue", 20, queue_state, cfg),
     }
 
 
@@ -2239,6 +2331,23 @@ function svcCard(title,s,extra,paused){
   <div class="row">${st=="active"?`<button onclick="act({action:'service',name:'${s.name}',op:'restart'},'Restarting')">Restart</button>
   <button class="danger" onclick="if(confirm('Stop ${title}?'))act({action:'service',name:'${s.name}',op:'stop'},'Stopping')">Stop</button>`
   :`<button class="primary" onclick="act({action:'service',name:'${s?s.name:''}',op:'start'},'Starting')">Start</button>`}</div></div>`}
+function dur(s){if(s==null)return"?";s=Math.round(s);if(s<90)return s+" s";const m=Math.round(s/60);if(m<90)return m+" min";
+  const h=Math.floor(m/60);return h<48?h+" h "+(m%60?m%60+" min":""):Math.round(h/24)+" days"}
+function queueCard(q,d){                       // Dino 6 Nov: what the worker and the box have queued, with estimates
+  if(!q)return"";const lab=t=>((d.types||[]).find(x=>x.type==t)||{}).label||t;
+  const paused=d.worker_paused;const files=q.files||[];
+  let h=`<div class="card"><h2><span class="dot ${files.length?(paused?"warn":"ok"):""}"></span>Queue</h2>
+    <div class="big">${q.files_total?q.files_total.toLocaleString()+" file"+(q.files_total==1?"":"s"):"nothing waiting"}</div>
+    <div class="small muted">${q.files_total?(paused?"paused: resumes when GPU work is switched on":"about "+dur(q.eta_total_s)+" to read at the current pace"+(q.secs_each?" ("+q.secs_each+" s a file)":"")):""}</div>`;
+  h+=files.map(f=>`<details style="margin-top:6px"><summary class="small"><b>${esc(lab(f.type))}</b> ${f.n.toLocaleString()} · ~${dur(f.eta_s)}<span class="muted">${f.secs_each?" · "+f.secs_each+" s each":""} · oldest ${dur(f.oldest_s)} ago</span></summary>
+    ${f.next.map(n=>`<div class="small muted" style="margin-left:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(n)}">${esc(n)}</div>`).join("")}${f.n>f.next.length?`<div class="small muted" style="margin-left:12px">… and ${(f.n-f.next.length).toLocaleString()} more</div>`:""}</details>`).join("");
+  const ops=(q.running||[]).map(r=>`<div class="small" style="margin-top:4px" title="${esc(r.unit)}"><span class="dot ok"></span> ${esc(r.what||r.unit)}${r.since?` <span class="muted">· since ${esc(r.since.split(" ")[2]||r.since)}</span>`:""}</div>`)
+    .concat((q.runners||[]).map(r=>`<div class="small" style="margin-top:4px" title="${esc(r.what)}"><span class="dot ${r.state=="running"?"ok":"warn"}"></span> runner ${esc(r.name)} <span class="muted">· ${r.state=="running"?"running "+dur(r.since_s):"waiting"}${r.what?" · "+esc(r.what.slice(0,90)):""}</span></div>`));
+  if(ops.length)h+=`<div class="small" style="margin-top:8px"><b>Running and queued</b></div>`+ops.join("");
+  const up=q.upcoming||[];
+  if(up.length)h+=`<details style="margin-top:8px"><summary class="small"><b>Next 24 h</b> <span class="muted">${up.length} scheduled · next ${esc(up[0].at.slice(11))} ${esc((up[0].what||up[0].unit).slice(0,40))}</span></summary>
+    ${up.map(u=>`<div class="small" style="margin-top:3px" title="${esc(u.unit)}"><b>${esc(u.at.slice(11))}</b> <span class="muted">in ${dur(u.in_s)}</span> · ${esc((u.what||u.unit).slice(0,110))}</div>`).join("")}</details>`;
+  return h+`</div>`}
 function render(d){
   last=d;$("#upd").textContent=d.host+" · updated "+new Date(d.now).toLocaleTimeString();
   const svc=n=>d.services.find(s=>s.name==n);
@@ -2290,7 +2399,7 @@ function render(d){
     ${al.map(a=>`<div class="small" style="margin-top:6px"><b>${esc(a.unit)}</b> failed ${esc(a.at)} <button class="btn small" style="float:right" onclick="act({action:'clear_alert',flag:'${esc(a.flag)}'},'alert cleared')">Clear</button>
       <pre style="white-space:pre-wrap;margin:4px 0 0;font-size:12px;color:var(--bad)">${esc(a.text)}</pre></div>`).join("")}</div>`:"";
   $("#health").innerHTML=ax+svcCard("Worker",svc("mps-ocr-worker"),wx,d.worker_paused&&svc("mps-ocr-worker")?.active=="active")
-    +svcCard("NAS collector",svc("mps-ocr-collector"),cx)+ox+gx+sx+disk;
+    +queueCard(d.queue,d)+svcCard("NAS collector",svc("mps-ocr-collector"),cx)+ox+gx+sx+disk;
   const via=t=>{const v=t.via_today||{},c=v.cpu||0,g=(v.gpu_after_cpu||0)+(v.builtin||0)+(v.command||0);
     return t.cpu_first?`<div class="small muted">CPU-first · today ${c} CPU, ${g} GPU</div>`:""};
   $("#types").innerHTML=d.types.map(t=>`<tr><td><b>${esc(t.label)}</b>${via(t)}</td>
