@@ -25,7 +25,7 @@ STAMP=$(date +%Y%m%d-%H%M); AB=$D/ab-$STAMP
 SMOKE_ONLY=${SMOKE_ONLY:-0}; [ "$SMOKE_ONLY" = 1 ] && AB=$D/ab-smoke-$STAMP
 QA=${QA:-unsloth/Qwen2.5-VL-3B-Instruct-bnb-4bit}
 QB=${QB:-unsloth/Qwen3-VL-4B-Instruct-unsloth-bnb-4bit}
-EPOCHS=${EPOCHS:-2}                  # at most; fewer when both do not fit before the deadline
+EPOCHS=${EPOCHS:-$(cat "$ROOT/training/numbers_ab_epochs" 2>/dev/null || echo 2)}   # at most (567: file, Dino 6 Nov 3); fewer when both do not fit
 TEST_MAX=${TEST_MAX:-0}              # 0 = every usable test order (Dino 4 Nov "Yes, use all")
 SMOKE_STEPS=${SMOKE_STEPS:-6}
 GPU_TIMERS=${GPU_TIMERS:-"mps-route-sort.timer mps-tc-copies.timer mps-po-check.timer"}
