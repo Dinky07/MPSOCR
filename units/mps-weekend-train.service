@@ -1,0 +1,15 @@
+[Unit]
+Description=MPS one-off (Dino 6 Nov): this weekend's training now - quick training, then the numbers A/B to Tue 10 Nov 02:30; worker paused to Tue 03:00
+OnFailure=mps-alert@%n.service
+After=network-online.target
+[Service]
+Type=simple
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ml/numbers
+Environment=MPS_OCR_CONFIG=/srv/ocr/pipeline/config.json
+ExecStart=/bin/bash /srv/ocr/pipeline/weekend_train.sh
+RuntimeMaxSec=60h
+KillMode=mixed
+TimeoutStopSec=120
+Nice=5

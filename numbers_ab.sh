@@ -30,7 +30,7 @@ TEST_MAX=${TEST_MAX:-0}              # 0 = every usable test order (Dino 4 Nov "
 SMOKE_STEPS=${SMOKE_STEPS:-6}
 GPU_TIMERS=${GPU_TIMERS:-"mps-route-sort.timer mps-tc-copies.timer mps-po-check.timer"}
 export HF_HOME=/srv/ocr/hf-cache PYTHONUNBUFFERED=1
-if [ "$(date +%u)" -ge 6 ]; then DEADLINE=$(date -d "next monday 02:30" +%s); else DEADLINE=${DEADLINE:-$(date -d "+30 hours" +%s)}; fi
+if [ "$(date +%u)" -ge 6 ]; then DEADLINE=${DEADLINE:-$(date -d "next monday 02:30" +%s)}; else DEADLINE=${DEADLINE:-$(date -d "+30 hours" +%s)}; fi
 mkdir -p $AB; [ "$(id -u)" = 0 ] && chown -R dinoc:dinoc $D
 as_dinoc() { if [ "$(id -un)" = dinoc ]; then env HF_HOME=$HF_HOME PYTHONUNBUFFERED=1 "$@"; else sudo -u dinoc -E "$@"; fi; }
 exec > >(tee -a $AB/run.log) 2>&1
