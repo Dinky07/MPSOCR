@@ -56,7 +56,7 @@ for js in sorted(H.glob("*.json")):
         cnt["skipped: " + why] += 1
         rows.append((js.name, "skipped: " + why))
         continue
-    stem = re.sub(r'[\\/:*?"<>|#%]+', " ", Path(str(pdf.name if f.get("replaces") else sc.get("source_file") or pdf.name)).stem)[:110].strip()   # 529
+    stem = re.sub(r'[\\/:*?"<>|#%]+', " ", Path(str(pdf.name if (f.get("replaces") or f.get("split_from")) else sc.get("source_file") or pdf.name)).stem)[:110].strip()   # 529
     name, k = stem + ".pdf", 2
     while (IN / name).exists() or (md / (name + ".json")).exists() or list((ROOT / "work").glob(f"TestCerts__{glob.escape(name)}")):
         name, k = f"{stem}_{k}.pdf", k + 1
