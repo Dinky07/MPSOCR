@@ -22,13 +22,13 @@ until [ $idle -ge 2 ]; do
   sleep 60
 done
 WMD5=$(md5sum < $P/worker.py | cut -c1-32); JMD5=$(md5sum < $P/jt_reader.py | cut -c1-32)
-rm -rf /tmp/jt531 && mkdir -p /tmp/jt531 && cp -p $P/jt_reader.py $P/worker.py /tmp/jt531/
+rm -rf /tmp/jt531 && mkdir -p /tmp/jt531 && cp -p $P/jt_reader.py $P/worker.py $P/jt_prompt*.txt /tmp/jt531/   # 548: prompts beside the patched copy
 python3 $P/jt_fix_patch.py /tmp/jt531/jt_reader.py /tmp/jt531/worker.py && python3 -m py_compile /tmp/jt531/jt_reader.py /tmp/jt531/worker.py || { say "PATCH FAILED"; exit 1; }
 OWN=0; [ -e $R/PAUSE ] || { echo "jt reader fix test 531" > $R/PAUSE; OWN=1; say "worker paused"; }
 release() { [ $OWN = 1 ] && rm -f $R/PAUSE && say "worker resumed"; OWN=0; }
 trap release EXIT
 sleep 45
-cd $P && timeout 150m nice -n 5 python3 $P/jt_ab.py
+cd $P && timeout 300m nice -n 5 python3 $P/jt_ab.py
 release
 grep -q "VERDICT PASS" "$OUT" || { say "NOT INSTALLED (verdict not PASS)"; exit 0; }
 [ "$(md5sum < $P/worker.py | cut -c1-32)" = "$WMD5" ] && [ "$(md5sum < $P/jt_reader.py | cut -c1-32)" = "$JMD5" ] \

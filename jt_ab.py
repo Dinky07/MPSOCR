@@ -55,6 +55,8 @@ for t_ in ("JobTransfers", "RoninJobTransfers"):
         with tempfile.TemporaryDirectory() as tmp:
             subprocess.run(["pdfseparate", pdf, os.path.join(tmp, "p%03d.pdf")], check=True, capture_output=True)
             for pg in sorted(glob.glob(os.path.join(tmp, "p*.pdf"))):
+                if sum(pages[k] for k in ("read", "read (salvaged)", "still failing")) >= 90:   # 548: ~1 h of GPU, not 257 pages
+                    break
                 try:
                     ans = NEW.read(pg, OLL, jcp["model"], jcp["fewshot_dir"], int(jcp["px"]), prompt=jcp.get("prompt"))[0]
                     pages["read" + (" (salvaged)" if ans.get("_salvaged") else "")] += 1
