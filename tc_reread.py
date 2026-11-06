@@ -53,7 +53,7 @@ for js in sorted(H.glob("*.json")):
         cnt["skipped: " + why] += 1
         rows.append((js.name, "skipped: " + why))
         continue
-    stem = re.sub(r'[\\/:*?"<>|#%]+', " ", Path(str(sc.get("source_file") or pdf.name)).stem)[:110].strip()
+    stem = re.sub(r'[\\/:*?"<>|#%]+', " ", Path(str(pdf.name if f.get("replaces") else sc.get("source_file") or pdf.name)).stem)[:110].strip()   # 529
     name, k = stem + ".pdf", 2
     while (IN / name).exists() or (md / (name + ".json")).exists() or list((ROOT / "work").glob(f"TestCerts__{glob.escape(name)}")):
         name, k = f"{stem}_{k}.pdf", k + 1
@@ -72,7 +72,7 @@ for js in sorted(H.glob("*.json")):
                     note[k2] = sc[k2]
             if f.get("family"):
                 note["family"] = f["family"]
-            for k2 in ("old_columns", "old_url", "sp_item_id", "sp_url", "sync_mode"):
+            for k2 in ("old_columns", "old_url", "sp_item_id", "sp_url", "sync_mode", "replaces"):     # 529: replaces
                 if f.get(k2) not in (None, ""):
                     note[k2] = f[k2]
             (md / (name + ".json")).parent.mkdir(parents=True, exist_ok=True)
