@@ -23,6 +23,7 @@ H, IN = ROOT / "out" / "TestCerts" / "hold", ROOT / "in" / "TestCerts"
 LEDGER = ROOT / "work" / "tc_incomplete" / "held.csv"
 apply = "--apply" in sys.argv
 only_sideways = "--sideways" in sys.argv
+match = sys.argv[sys.argv.index("--match") + 1] if "--match" in sys.argv else None          # 535
 
 
 def sideways(pdf):
@@ -43,6 +44,8 @@ for js in sorted(H.glob("*.json")):
     except (OSError, ValueError):
         continue
     f = sc.get("fields") or {}
+    if match and match not in js.name:                  # 535
+        continue
     pdf = H / str(sc.get("file") or "")
     why = ("checked" if f.get("checked") else "edited by a person" if [e for e in sc.get("edits") or [] if "by" not in e] else
            "uploaded" if Path(str(js) + ".uploaded").exists() else "PDF missing" if not pdf.is_file() else None)
