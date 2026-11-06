@@ -22,6 +22,7 @@ ap.add_argument("--out-name", default="eval.json")
 ap.add_argument("--base", default="unsloth/Qwen2.5-VL-3B-Instruct-bnb-4bit")
 ap.add_argument("--max-new", type=int, default=2048)
 ap.add_argument("--limit", type=int, default=0, help="smoke test: first N test orders only")
+ap.add_argument("--max-seconds", type=int, default=0, help="561: stop after this long and write what was scored")
 a = ap.parse_args()
 
 from unsloth import FastVisionModel                              # noqa: E402
@@ -87,7 +88,12 @@ def read(img):
 KINDS = ("main", "numbers", "combined", "combined_desc")
 tot = {k: {"qty": [0, 0], "price": [0, 0], "description": [0, 0], "supplier": [0, 0], "date": [0, 0], "job": [0, 0]} for k in KINDS}
 docs, t0 = [], time.time()
+stopped = False
 for i, r in enumerate(tests, 1):
+    if a.max_seconds and time.time() - t0 >= a.max_seconds:
+        stopped = True
+        print(f"time limit {a.max_seconds}s reached after {i - 1}/{len(tests)} orders: scored so far kept", flush=True)
+        break
     s = time.time()
     raw = read(data / r["image"])
     nums = parse(raw)
@@ -129,11 +135,13 @@ for i, r in enumerate(tests, 1):
     print(f"  {i}/{len(tests)} {r['file'][:50]:50} {time.time() - s:5.1f}s lines {len(ver)} numbers {len(nums or [])} main {len(main)}", flush=True)
 res = {k: {f: {"right": v[f][0], "counted": v[f][1], "acc": round(v[f][0] / v[f][1], 4) if v[f][1] else None} for f in v}
        for k, v in tot.items()}
-res["secs_per_order"] = round((time.time() - t0) / max(1, len(tests)), 1)
+res["secs_per_order"] = round((time.time() - t0) / max(1, len(docs)), 1)
+res["secs_median"] = sorted(d["secs"] for d in docs)[len(docs) // 2] if docs else None   # 561: for planning
 res["numbers_used_on"] = sum(d["numbers_used"] for d in docs)
-res["tests"] = len(tests)
+res["tests"] = len(docs)
+res["tests_planned"], res["stopped_at_time_limit"] = len(tests), stopped
 json.dump({"results": res, "docs": docs}, open(run / a.out_name, "w"), ensure_ascii=False, indent=1)
-print(f"\n{len(tests)} test orders, {tot['main']['qty'][1]} lines; numbers model used on {res['numbers_used_on']} orders "
+print(f"\n{len(docs)} test orders, {tot['main']['qty'][1]} lines; numbers model used on {res['numbers_used_on']} orders "
       f"(same line count as the current reader); {res['secs_per_order']} s per order")
 print(f"{'':14}{'line qty':>12}{'line price':>12}{'description':>13}{'supplier':>10}{'date':>8}")
 pc = lambda v, w: f"{v * 100:{w - 1}.1f}%" if v is not None else f"{'-':>{w}}"

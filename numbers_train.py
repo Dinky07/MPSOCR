@@ -19,12 +19,15 @@ ap.add_argument("--lr", type=float, default=2e-4)
 ap.add_argument("--max-seq", type=int, default=8192)
 ap.add_argument("--max-steps", type=int, default=0, help="smoke test: stop after N steps")
 ap.add_argument("--limit", type=int, default=0, help="smoke test: first N orders only")
+ap.add_argument("--max-seconds", type=int, default=0, help="561: stop training after this long; the adapter is still saved")
 a = ap.parse_args()
 
 from unsloth import FastVisionModel, is_bf16_supported          # noqa: E402
 from unsloth.trainer import UnslothVisionDataCollator            # noqa: E402
 from trl import SFTTrainer, SFTConfig                            # noqa: E402
 from PIL import Image                                            # noqa: E402
+import statistics, time                                          # noqa: E402
+from transformers import TrainerCallback                         # noqa: E402
 
 data, out = Path(a.data), Path(a.out)
 out.mkdir(parents=True, exist_ok=True)
@@ -56,6 +59,29 @@ class Orders(list):
 
 dataset = Orders(rows)
 
+
+class Clock(TrainerCallback):
+    """561: step times for planning, and a graceful stop at --max-seconds (the adapter is saved as at the end)."""
+    def __init__(self):
+        self.t0, self.ends, self.stopped = None, [], False
+
+    def on_train_begin(self, args, state, control, **kw):
+        self.t0 = time.time()
+
+    def on_step_end(self, args, state, control, **kw):
+        self.ends.append(time.time())
+        if a.max_seconds and time.time() - self.t0 >= a.max_seconds and not control.should_training_stop:
+            control.should_training_stop, self.stopped = True, True
+            print(f"time limit {a.max_seconds}s reached at step {state.global_step}/{state.max_steps}: stopping, adapter kept", flush=True)
+        return control
+
+    def secs_per_step(self):
+        d = [y - x for x, y in zip(self.ends, self.ends[1:])][1:]       # the first steps carry the warm-up
+        return round(statistics.median(d), 2) if d else None
+
+
+clock = Clock()
+
 model, tokenizer = FastVisionModel.from_pretrained(a.base, load_in_4bit=True, use_gradient_checkpointing="unsloth",
                                                   max_seq_length=a.max_seq)
 model = FastVisionModel.get_peft_model(model, finetune_vision_layers=True, finetune_language_layers=True,
@@ -76,11 +102,15 @@ tkw = {"processing_class" if "processing_class" in inspect.signature(SFTTrainer.
 # resize="max": train on the full 1600 px page (the default "min" shrank pages to 512 px wide - too small
 # for handwritten digits, and not what the model sees when it reads)
 trainer = SFTTrainer(model=model, data_collator=UnslothVisionDataCollator(model, tokenizer, resize="max", max_seq_length=a.max_seq), train_dataset=dataset,
-                     args=SFTConfig(**kw), **tkw)
+                     args=SFTConfig(**kw), callbacks=[clock], **tkw)
 stats = trainer.train()
 print("training finished:", stats, flush=True)
 model.save_pretrained(str(out / "lora"))
 tokenizer.save_pretrained(str(out / "lora"))
 (out / "train_info.json").write_text(json.dumps({"base": a.base, "orders": len(rows), "epochs": a.epochs, "rank": a.rank,
-                                                 "lr": a.lr, "train_loss": getattr(stats, "training_loss", None)}, indent=1))
+                                                 "lr": a.lr, "train_loss": getattr(stats, "training_loss", None),
+                                                 "steps": trainer.state.global_step, "steps_planned": trainer.state.max_steps,
+                                                 "epochs_done": round(trainer.state.epoch or 0, 3), "secs_per_step": clock.secs_per_step(),
+                                                 "stopped_at_time_limit": clock.stopped,
+                                                 "train_secs": round(time.time() - clock.t0) if clock.t0 else None}, indent=1))
 print("adapter saved:", out / "lora", flush=True)
