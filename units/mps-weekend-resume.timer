@@ -1,7 +1,7 @@
 [Unit]
-Description=MPS one-off: worker and PO feed back on, Tuesday 10 Nov 2026 03:00
+Description=MPS one-off: all OCR back on, Thursday 12 Nov 2026 03:00 at the latest (the training chain does it sooner when done)
 [Timer]
-OnCalendar=2026-11-10 03:00:00
+OnCalendar=2026-11-12 03:00:00
 Persistent=true
 Unit=mps-weekend-resume.service
 [Install]

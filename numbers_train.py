@@ -20,6 +20,7 @@ ap.add_argument("--max-seq", type=int, default=8192)
 ap.add_argument("--max-steps", type=int, default=0, help="smoke test: stop after N steps")
 ap.add_argument("--limit", type=int, default=0, help="smoke test: first N orders only")
 ap.add_argument("--max-seconds", type=int, default=0, help="561: stop training after this long; the adapter is still saved")
+ap.add_argument("--save-epochs", default="", help="569: also save the adapter at the end of these epochs, e.g. 2,3,4")
 a = ap.parse_args()
 
 from unsloth import FastVisionModel, is_bf16_supported          # noqa: E402
@@ -75,11 +76,24 @@ class Clock(TrainerCallback):
             print(f"time limit {a.max_seconds}s reached at step {state.global_step}/{state.max_steps}: stopping, adapter kept", flush=True)
         return control
 
+    def on_epoch_end(self, args, state, control, **kw):              # 569
+        n = round(state.epoch or 0)
+        if n in SAVE_AT and abs((state.epoch or 0) - n) < 0.01:
+            d = out / f"epoch-{n}"
+            model.save_pretrained(str(d / "lora"))
+            tokenizer.save_pretrained(str(d / "lora"))
+            (d / "prompt.txt").write_text(rows[0]["prompt"], encoding="utf-8")
+            (d / "train_info.json").write_text(json.dumps({"base": a.base, "orders": len(rows), "epochs": n, "of_epochs": a.epochs,
+                                                           "steps": state.global_step, "rank": a.rank, "lr": a.lr}, indent=1))
+            print(f"epoch {n}: adapter saved to {d}", flush=True)
+        return control
+
     def secs_per_step(self):
         d = [y - x for x, y in zip(self.ends, self.ends[1:])][1:]       # the first steps carry the warm-up
         return round(statistics.median(d), 2) if d else None
 
 
+SAVE_AT = {int(x) for x in a.save_epochs.split(",") if x.strip()}
 clock = Clock()
 
 model, tokenizer = FastVisionModel.from_pretrained(a.base, load_in_4bit=True, use_gradient_checkpointing="unsloth",

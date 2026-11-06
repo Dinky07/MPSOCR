@@ -16,6 +16,11 @@
 #    B); 2 epochs of 5,376 orders on both would need ~37 h of the ~31 h there are, and a run cut off by the time limit
 #    used to leave no adapter at all
 #  - training and scoring stop gracefully at their time limit (adapter kept / scored orders kept)
+# 569 (Dino 6 Nov "delay all OCR until all planned training is done and training is maximised ... even thursday"):
+#  - at most training/numbers_ab_epochs epochs (5) and the deadline in training/numbers_ab_deadline (both read after the
+#    568 hold); the adapter is also saved at the end of every whole epoch from 2 (numbers_train.py --save-epochs) and
+#    every one of them is scored (the final ones and the live model first), so the report shows which number of epochs
+#    reads best instead of a guess; the smoke tests check the epoch saving (2 short epochs, the epoch-1 adapter scored)
 #  SMOKE_ONLY=1: smoke tests and the plan only (nothing trained), PLAN_LEFT=<s> plans as if that much time were left.
 set -uo pipefail
 P=/srv/ocr/pipeline; V=/srv/ml/train-venv/bin/python; D=/srv/ml/numbers; DS=$D/data-sheet
@@ -25,7 +30,7 @@ STAMP=$(date +%Y%m%d-%H%M); AB=$D/ab-$STAMP
 SMOKE_ONLY=${SMOKE_ONLY:-0}; [ "$SMOKE_ONLY" = 1 ] && AB=$D/ab-smoke-$STAMP
 QA=${QA:-unsloth/Qwen2.5-VL-3B-Instruct-bnb-4bit}
 QB=${QB:-unsloth/Qwen3-VL-4B-Instruct-unsloth-bnb-4bit}
-EPOCHS=${EPOCHS:-$(cat "$ROOT/training/numbers_ab_epochs" 2>/dev/null || echo 2)}   # at most (567: file, Dino 6 Nov 3); fewer when both do not fit
+EPOCHS_ENV=${EPOCHS:-}               # 569: else training/numbers_ab_epochs (read after the hold), else 2
 TEST_MAX=${TEST_MAX:-0}              # 0 = every usable test order (Dino 4 Nov "Yes, use all")
 SMOKE_STEPS=${SMOKE_STEPS:-6}
 GPU_TIMERS=${GPU_TIMERS:-"mps-route-sort.timer mps-tc-copies.timer mps-po-check.timer"}
@@ -89,6 +94,9 @@ v=json.load(open(sys.argv[1]))
 for k in sys.argv[2].split("."): v=(v or {}).get(k)
 print("" if v is None else v)' "$1" "$2" 2>/dev/null; }
 
+while [ -e "$ROOT/training/numbers_ab_hold" ]; do sleep 60; done    # 568: held while its plan is changed
+EPOCHS=${EPOCHS_ENV:-$(cat "$ROOT/training/numbers_ab_epochs" 2>/dev/null || echo 2)}
+[ -s "$ROOT/training/numbers_ab_deadline" ] && DEADLINE=$(date -d "$(cat "$ROOT/training/numbers_ab_deadline")" +%s)   # 569
 ACTIVE=$(readlink -f $D/active 2>/dev/null || true)
 say "numbers A/B $STAMP$([ $SMOKE_ONLY = 1 ] && echo " (SMOKE TEST ONLY)"): A $QA | B $QB | live ${ACTIVE:-none} | deadline $(date -d @$DEADLINE '+%a %F %H:%M')"
 if [ "${IN_QUEUE:-0}" != 1 ]; then
@@ -116,7 +124,7 @@ done
 
 # 2. timed smoke tests on the longest orders (most memory), scoring 3 test orders, for both bases
 SM=$D/smoke-data; rm -rf $SM; mkdir -p $SM; ln -s $DS/img $SM/img; cp $DS/prompt.txt $SM/ 2>/dev/null
-python3 - "$DS" "$SM" "$((SMOKE_STEPS * 8))" <<'PY'
+python3 - "$DS" "$SM" "$((SMOKE_STEPS * 4))" <<'PY'
 import json, sys
 ds, sm, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
 rows = [l for l in open(f"{ds}/train.jsonl", encoding="utf-8") if l.strip()]
@@ -126,16 +134,23 @@ tests = [l for l in open(f"{ds}/test.jsonl", encoding="utf-8") if l.strip()]
 open(f"{sm}/test.jsonl", "w", encoding="utf-8").writelines(tests[:3])
 print(f"smoke data: the {n} longest training orders (longest answer {len(json.loads(rows[0])['answer'])} chars), 3 test orders")
 PY
-declare -A OK=([A]=0 [B]=0) SPS=([A]=0 [B]=0) SPO=([A]=0 [B]=0) PEAK=([A]=0 [B]=0) BASE=([A]=$QA [B]=$QB)
+declare -A OK=([A]=0 [B]=0) SPS=([A]=0 [B]=0) SPO=([A]=0 [B]=0) PEAK=([A]=0 [B]=0) SAVE=([A]=0 [B]=0) BASE=([A]=$QA [B]=$QB)
 for k in A B; do
     rm -rf $D/smoke-$k
     gpu_free || { say "smoke test $k skipped: GPU not free"; continue; }
-    say "smoke test $k (${BASE[$k]}): $SMOKE_STEPS steps on the longest orders, then scoring 3 test orders"
+    say "smoke test $k (${BASE[$k]}): 2 short epochs ($SMOKE_STEPS steps) on the longest orders, the epoch-1 adapter scored on 3 test orders"
     peak_on $k
-    if as_dinoc $V $P/numbers_train.py --base ${BASE[$k]} --data $SM --out $D/smoke-$k --max-steps $SMOKE_STEPS \
-       && as_dinoc $V $P/numbers_eval.py --data $SM --run $D/smoke-$k; then
-        OK[$k]=1; SPS[$k]=$(jget $D/smoke-$k/train_info.json secs_per_step); SPO[$k]=$(jget $D/smoke-$k/eval.json results.secs_median)
-    else say "smoke test $k FAILED"; fi
+    if as_dinoc $V $P/numbers_train.py --base ${BASE[$k]} --data $SM --out $D/smoke-$k --epochs 2 --save-epochs 1 \
+       && [ -d $D/smoke-$k/epoch-1/lora ] && as_dinoc $V $P/numbers_eval.py --data $SM --run $D/smoke-$k/epoch-1; then
+        OK[$k]=1; SAVE[$k]=1; SPS[$k]=$(jget $D/smoke-$k/train_info.json secs_per_step); SPO[$k]=$(jget $D/smoke-$k/epoch-1/eval.json results.secs_median)
+    else
+        say "smoke test $k with epoch saving FAILED: once more without it (then only the final adapter is scored)"
+        rm -rf $D/smoke-$k
+        if as_dinoc $V $P/numbers_train.py --base ${BASE[$k]} --data $SM --out $D/smoke-$k --max-steps $SMOKE_STEPS \
+           && as_dinoc $V $P/numbers_eval.py --data $SM --run $D/smoke-$k; then
+            OK[$k]=1; SPS[$k]=$(jget $D/smoke-$k/train_info.json secs_per_step); SPO[$k]=$(jget $D/smoke-$k/eval.json results.secs_median)
+        else say "smoke test $k FAILED"; fi
+    fi
     PEAK[$k]=$(peak_off $k)
     [ "${OK[$k]}" = 1 ] && say "smoke test $k passed: ${SPS[$k]} s a step, ${SPO[$k]} s an order (barely trained), GPU peak ${PEAK[$k]} MiB"
     rm -rf $D/smoke-$k
@@ -143,60 +158,70 @@ done
 rm -rf $SM
 [ "${OK[A]}${OK[B]}" = "00" ] && { say "both smoke tests failed: nothing trained"; exit 1; }
 
-# 3. the plan: the same epochs for A and B (at most EPOCHS) so both trainings and the three scorings fit
+# 3. the plan (569): the same epochs for A and B, as many as fit (at most EPOCHS) with both trainings, the scoring of
+#    every saved whole epoch from 2 and of the final adapters and the live model, before the deadline
 PLEFT=${PLAN_LEFT:-$(left)}
 eval "$(python3 - "$NTRAIN" "$NTEST" "$PLEFT" "$EPOCHS" "${OK[A]}" "${OK[B]}" "${SPS[A]:-0}" "${SPS[B]:-0}" "${SPO[A]:-0}" "${SPO[B]:-0}" \
-        "$([ -n "$ACTIVE" ] && [ -d "$ACTIVE/lora" ] && echo 1 || echo 0)" "$AB/plan.json" <<'PY'
+        "$([ -n "$ACTIVE" ] && [ -d "$ACTIVE/lora" ] && echo 1 || echo 0)" "$AB/plan.json" "${SAVE[A]}" "${SAVE[B]}" <<'PY'
 import json, math, sys
 ntr, nte, left, emax = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4])
 ok = {"A": sys.argv[5] == "1", "B": sys.argv[6] == "1"}
 sps = {"A": float(sys.argv[7] or 0) * 1.1, "B": float(sys.argv[8] or 0) * 1.1}
 spo = {"A": float(sys.argv[9] or 0), "B": float(sys.argv[10] or 0)}
 live = sys.argv[11] == "1"
+save = {"A": sys.argv[13] == "1", "B": sys.argv[14] == "1"}
 spe = math.ceil(ntr / 8)                                  # steps per epoch (batch 1 x 8 accumulated)
 base_e = 8.0 * 1.2                                        # the 3B scored 7.3-8.1 s an order; the answer is longer now
 ratio = min(3.0, max(0.7, spo["B"] / spo["A"])) if ok["A"] and ok["B"] and spo["A"] else 1.5
-ev = {"A": base_e if ok["A"] else 0, "B": base_e * ratio if ok["B"] else 0, "live": base_e if live else 0}
+ev = {"A": base_e, "B": base_e * ratio, "live": base_e if live else 0}
 note = []
-def fit(o):
-    teval = nte * (ev["live"] + (ev["A"] if o["A"] else 0) + (ev["B"] if o["B"] else 0))
-    per_epoch = spe * sum(sps[k] for k in "AB" if o[k])
-    avail = left - teval - 3600                            # model loading, the dataset, margin
-    return teval, (avail / per_epoch if per_epoch else 0)
-teval, e = fit(ok)
+cps = lambda e: [n for n in range(2, int(math.ceil(e))) if n < e - 1e-6]     # whole epochs from 2 before the last
+def cost(e, o):
+    teval = nte * (ev["live"] + sum(ev[k] * (1 + (len(cps(e)) if save[k] else 0)) for k in "AB" if o[k]))
+    return spe * e * sum(sps[k] for k in "AB" if o[k]) + teval + 3600         # + model loading, the dataset, margin
+def best(o):
+    e = math.floor(emax * 10) / 10
+    while e >= 0.3 and cost(e, o) > left:
+        e = round(e - 0.1, 1)
+    return e if e >= 0.3 else 0
+e = best(ok)
 if ok["A"] and ok["B"] and e < 0.5:
-    note.append(f"both fit only {e:.2f} epochs: B (the slower) dropped, A trained alone")
-    ok["B"] = False; ev["B"] = 0
-    teval, e = fit(ok)
-e = math.floor(min(emax, e) * 10) / 10
-if e < 0.3:
+    note.append(f"both fit only {e} epochs: B (the slower) dropped, A trained alone")
+    ok["B"] = False
+    e = best(ok)
+if not e:
     note.append("less than 0.3 epochs fit before the deadline: nothing trained")
-    e = 0
-bud = {k: (round(spe * e * sps[k] * 1.25) if ok[k] and e else 0) for k in "AB"}
+c = cps(e)
+nc = {k: (len(c) if save[k] else 0) for k in "AB"}
 est = {k: round(spe * e * sps[k]) if ok[k] else 0 for k in "AB"}
-plan = {"epochs": e, "epochs_max": emax, "steps_per_epoch": spe, "train": ntr, "test": nte, "secs_left": left,
-        "secs_per_step": sps, "eval_secs_per_order": ev, "eval_ratio_B_to_A": round(ratio, 2), "train_est_s": est,
-        "train_limit_s": bud, "eval_est_s": {k: round(nte * v) for k, v in ev.items()}, "use": ok, "notes": note,
-        "total_est_h": round((sum(est.values()) + teval) / 3600, 1)}
+bud = {k: round(est[k] * 1.25) for k in "AB"}
+ev1 = {k: round(nte * ev[k]) if ok[k] else 0 for k in "AB"}
+evt = {k: ev1[k] * (1 + nc[k]) for k in "AB"}
+evl = round(nte * ev["live"])
+plan = {"epochs": e, "epochs_max": emax, "saved_epochs_scored": c, "steps_per_epoch": spe, "train": ntr, "test": nte, "secs_left": left,
+        "secs_per_step": sps, "eval_secs_per_order": ev, "eval_ratio_B_to_A": round(ratio, 2), "train_est_s": est, "train_limit_s": bud,
+        "eval_est_s": {"A_each": ev1["A"], "B_each": ev1["B"], "live": evl, "all": evt["A"] + evt["B"] + evl}, "use": ok, "epoch_saving": save,
+        "notes": note, "total_est_h": round((cost(e, ok) - 3600) / 3600, 1) if e else 0}
 json.dump(plan, open(sys.argv[12], "w"), indent=1)
 print(f"E={e}; OK[A]={int(ok['A'])}; OK[B]={int(ok['B'])}; BUD_A={bud['A']}; BUD_B={bud['B']}; EST_A={est['A']}; EST_B={est['B']}; "
-      f"EV_A={round(nte * ev['A'])}; EV_B={round(nte * ev['B'])}; EV_L={round(nte * ev['live'])}; PLAN_NOTE='{'; '.join(note)}'")
+      f"EV_A={ev1['A']}; EV_B={ev1['B']}; EV_L={evl}; EVT_A={evt['A']}; EVT_B={evt['B']}; CPS='{' '.join(map(str, c))}'; PLAN_NOTE='{'; '.join(note)}'")
 PY
 )"
-say "plan: $E epochs each ($(jget $AB/plan.json steps_per_epoch) steps an epoch) | A ~$((EST_A / 3600)) h | B ~$((EST_B / 3600)) h | scoring A ~$((EV_A / 3600)) h, B ~$((EV_B / 3600)) h, live ~$((EV_L / 3600)) h | all ~$(jget $AB/plan.json total_est_h) h of $((PLEFT / 3600)) h${PLAN_NOTE:+ | $PLAN_NOTE}"
+say "plan: $E epochs each ($(jget $AB/plan.json steps_per_epoch) steps an epoch), epochs ${CPS:-none} saved and scored too | A ~$((EST_A / 3600)) h | B ~$((EST_B / 3600)) h | scoring ~$(( (EVT_A + EVT_B + EV_L) / 3600 )) h | all ~$(jget $AB/plan.json total_est_h) h of $((PLEFT / 3600)) h | ends about $(date -d @$(( $(date +%s) + (EST_A + EST_B + EVT_A + EVT_B + EV_L) )) '+%a %H:%M')${PLAN_NOTE:+ | $PLAN_NOTE}"
 if [ "$SMOKE_ONLY" = 1 ]; then cp $AB/run.log "$ROOT/reports/numbers ab smoke test $STAMP.txt" 2>/dev/null; say "smoke test only: done"; exit 0; fi
 [ "$E" = 0 ] && { say "nothing trained"; exit 1; }
 
 # 4. fine-tune each with the same epochs; a graceful time limit keeps the adapter if a run is slower than measured
 for k in A B; do
     [ "${OK[$k]}" = 1 ] || continue
-    rest=$(( EV_A + EV_B + EV_L + 1800 )); [ $k = A ] && [ "${OK[B]}" = 1 ] && rest=$(( rest + EST_B ))
+    rest=$(( ${OK[A]} * EVT_A + ${OK[B]} * EVT_B + EV_L + 1800 )); [ $k = A ] && [ "${OK[B]}" = 1 ] && rest=$(( rest + EST_B ))
+    SE=""; [ "${SAVE[$k]}" = 1 ] && [ -n "$CPS" ] && SE="--save-epochs ${CPS// /,}"
     bud=$([ $k = A ] && echo $BUD_A || echo $BUD_B); cap=$(( $(left) - rest )); [ $cap -lt $bud ] && bud=$cap
     [ $bud -lt 1800 ] && { say "less than 30 min left to fine-tune $k: skipped"; OK[$k]=0; continue; }
     gpu_free || { say "fine-tuning $k skipped: GPU not free"; OK[$k]=0; continue; }
     say "fine-tuning $k (${BASE[$k]}): $NTRAIN orders x $E epochs (time limit ${bud}s)"
     t0=$(date +%s)
-    if as_dinoc timeout $(( bud + 2700 ))s $V $P/numbers_train.py --base ${BASE[$k]} --data $DS --out $AB/$k --epochs $E --max-seconds $bud \
+    if as_dinoc timeout $(( bud + 2700 ))s $V $P/numbers_train.py --base ${BASE[$k]} --data $DS --out $AB/$k --epochs $E --max-seconds $bud $SE \
        && [ -d $AB/$k/lora ]; then
         say "fine-tuned $k in $(( ($(date +%s) - t0) / 60 )) min: $(jget $AB/$k/train_info.json epochs_done) epochs, $(jget $AB/$k/train_info.json steps) steps$([ "$(jget $AB/$k/train_info.json stopped_at_time_limit)" = True ] && echo ' (stopped at the time limit)')"
     else
@@ -204,22 +229,27 @@ for k in A B; do
     fi
 done
 
-# 5. score A, B and the live model on the same test orders
-for k in A B live; do
-    if [ $k = live ]; then
-        [ -n "$ACTIVE" ] && [ -d "$ACTIVE/lora" ] || continue
-        mkdir -p $AB/live && ln -sfn $ACTIVE/lora $AB/live/lora; RUN=$AB/live
+# 5. score: the final A and B adapters and the live model first, then every saved epoch (569), on the same test orders
+JOBS=(); JEST=()
+for k in A B; do [ "${OK[$k]}" = 1 ] && [ -d $AB/$k/lora ] && { JOBS+=("$k"); JEST+=($([ $k = A ] && echo $EV_A || echo $EV_B)); }; done
+[ -n "$ACTIVE" ] && [ -d "$ACTIVE/lora" ] && { JOBS+=(live); JEST+=($EV_L); }
+for n in $CPS; do for k in A B; do
+    [ "${OK[$k]}" = 1 ] && [ -d $AB/$k/epoch-$n/lora ] && { JOBS+=("$k/epoch-$n"); JEST+=($([ $k = A ] && echo $EV_A || echo $EV_B)); }
+done; done
+say "scoring ${#JOBS[@]}: ${JOBS[*]}"
+for i in "${!JOBS[@]}"; do
+    j=${JOBS[$i]}; est=${JEST[$i]}; rest=0
+    for x in "${JEST[@]:$((i + 1))}"; do rest=$(( rest + x )); done
+    if [ $j = live ]; then
+        mkdir -p $AB/live && ln -sfn $ACTIVE/lora $AB/live/lora
         [ -f $ACTIVE/prompt.txt ] && cp $ACTIVE/prompt.txt $AB/live/   # 497: the live model reads with the prompt it learnt
-        est=$EV_L; rest=0
-    else
-        [ "${OK[$k]}" = 1 ] || continue; RUN=$AB/$k
-        if [ $k = A ]; then est=$EV_A; rest=$(( ${OK[B]} * EV_B + EV_L )); else est=$EV_B; rest=$EV_L; fi
     fi
+    RUN=$AB/$j
     lim=$(( $(left) - rest - 600 )); [ $lim -gt $(( est * 13 / 10 + 1800 )) ] && lim=$(( est * 13 / 10 + 1800 ))
-    [ $lim -lt 1200 ] && { say "no time left to score $k"; continue; }
-    gpu_free || { say "scoring $k skipped: GPU not free"; continue; }
-    say "scoring $k (time limit ${lim}s)"
-    as_dinoc timeout $(( lim + 1800 ))s $V $P/numbers_eval.py --data $DS --run $RUN --max-seconds $lim || say "scoring $k failed"
+    [ $lim -lt 1200 ] && { say "no time left to score $j"; continue; }
+    gpu_free || { say "scoring $j skipped: GPU not free"; continue; }
+    say "scoring $j (time limit ${lim}s)"
+    as_dinoc timeout $(( lim + 1800 ))s $V $P/numbers_eval.py --data $DS --run $RUN --max-seconds $lim || say "scoring $j failed"
 done
 resume
 
@@ -251,9 +281,21 @@ def side(k):
         out["train"] = json.load(open(ti))
     return out
 plan = json.load(open(ab / "plan.json")) if (ab / "plan.json").exists() else None
+cps = {k: {p.name.split("-")[1]: side(f"{k}/{p.name}") for p in sorted((ab / k).glob("epoch-*")) if (p / "eval.json").exists()}
+       for k in ("A", "B") if (ab / k).is_dir()}                                       # 569: every saved epoch scored
 r = {"id": ab.name, "kind": "numbers-ab", "at": datetime.now().isoformat(timespec="seconds"), "data": json.load(open(ab.parent / "data-sheet" / "source.json")),
      "plan": plan, "A": {"base": qa, **(side("A") or {"failed": True})}, "B": {"base": qb, **(side("B") or {"failed": True})},
-     "live": {"run": active, **(side("live") or {"failed": True})}, "installed": False}
+     "live": {"run": active, **(side("live") or {"failed": True})}, "checkpoints": cps, "installed": False}
+def ov(x):
+    c = (x or {}).get("combined") or {}
+    return c.get("overall") if c.get("overall") is not None else -1
+r["best"] = {}
+for k in ("A", "B"):
+    cand = {f"final ({(r[k].get('train') or {}).get('epochs_done')} epochs)": r[k]} | {f"epoch {n}": v for n, v in cps.get(k, {}).items()}
+    cand = {n: v for n, v in cand.items() if v and not v.get("failed")}
+    if cand:
+        n = max(cand, key=lambda n: ov(cand[n]))
+        r["best"][k] = {"which": n, "qty_price": ov(cand[n]), "path": n}
 pc = lambda v: "-" if v is None else f"{v * 100:.1f} %"
 lines = []
 for k in ("live", "A", "B"):
@@ -263,7 +305,8 @@ for k in ("live", "A", "B"):
                              + (f" ({r[k]['tests_scored']} orders)" if r[k].get("tests_scored") else "")))
 reader = (r["live"].get("main") or r["A"].get("main") or {})
 r["reader"] = reader
-r["why"] = "scored only, not installed (Dino picks): " + (f"{plan['epochs']} epochs each | " if plan else "") + " | ".join(lines) + (
+best_txt = " | best: " + ", ".join(f"{k} {v['which']} {v['qty_price'] * 100:.1f} % qty + price" for k, v in r["best"].items()) if r["best"] else ""
+r["why"] = "scored only, not installed (Dino picks): " + (f"{plan['epochs']} epochs each | " if plan else "") + " | ".join(lines) + best_txt + (
     f" | reader alone: qty {pc(reader.get('line_qty'))}, price {pc(reader.get('line_price'))}, supplier {pc(reader.get('supplier'))}, date {pc(reader.get('date'))}" if reader else "")
 json.dump(r, open(rep_p, "w"), indent=1)
 print("report:", rep_p, "|", r["why"])
