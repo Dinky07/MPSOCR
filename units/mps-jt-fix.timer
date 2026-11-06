@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS one-off: JT reader fix test, 6 Nov 2026 (waits for an idle worker)
+[Timer]
+OnCalendar=2026-11-06 09:20:00
+Persistent=false
+Unit=mps-jt-fix.service
+[Install]
+WantedBy=timers.target
