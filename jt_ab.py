@@ -28,7 +28,7 @@ jc.setdefault("px", 1600)
 OLL = cfg["ollama_url"]
 print("settings:", jc, flush=True)
 
-tests = [json.loads(l) for l in open(ROOT / "training" / "test.jsonl", encoding="utf-8")]
+tests = [json.loads(l) for l in open("/srv/ocr/scans/training/test.jsonl", encoding="utf-8")]     # 542: the JT review set
 tests = [x for x in tests if os.path.exists(x["image"])]
 side = {}
 for name, M in (("live", OLD), ("patched", NEW)):
