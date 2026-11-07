@@ -5,6 +5,8 @@
 # later ones held: it runs once now), the PO check, route sort, TC copies and the weekly training queue start again.
 R=/srv/ocr/scans/pipeline
 say() { echo "$(date '+%F %T') $*"; }
+# 591: a restart of the chain (new steps) is not its end: the runner leaves this note first
+if [ -e $R/training/chain_restart ]; then rm -f $R/training/chain_restart; say "chain restarted, not ended: OCR stays held"; exit 0; fi
 for u in mps-weekend-train.service mps-after-train.service; do
     if systemctl is-active --quiet $u && [ "${FROM_CHAIN:-0}" != 1 ]; then
         say "$u is still going at the latest resume time: stopping it (what it scored is kept)"

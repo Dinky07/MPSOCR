@@ -34,7 +34,7 @@ import tc_reader  # noqa: E402
 FIELDS = ["cert_no", "date", "mill", "mps_po", "ronin_po", "family", "grade"]
 KEY_FIELDS = ("heat_old_site", "line_heat", "line_size_nb", "line_qty")
 FAMS = ("Pipe", "Flanges", "Fittings")
-DEFAULTS = {"tc_quick_min_scored": 8, "tc_test_max": 25, "tc_test_max_pages": 3, "tc_key_drop": 0.03, "tc_min_gain": 0.005}
+DEFAULTS = {"tc_quick_min_scored": 8, "tc_test_max": 100, "tc_test_max_pages": 3, "tc_key_drop": 0.03, "tc_min_gain": 0.005}
 _HK = lambda s: re.sub(r"[^A-Z0-9]", "", str(s or "").upper())
 
 
