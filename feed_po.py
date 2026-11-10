@@ -60,6 +60,8 @@ def main():
     for p in sorted(src.rglob("*")):
         if not p.is_file() or p.suffix.lower() != ".pdf":
             continue
+        if any("personal" in d.lower() for d in p.relative_to(src).parts[:-1]):       # Dino 10 Nov: private papers
+            continue
         g = group_of(p.relative_to(src))
         if not g:
             continue
