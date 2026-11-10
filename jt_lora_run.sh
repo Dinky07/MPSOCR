@@ -12,36 +12,58 @@ SC=/srv/ocr/scans; P=/srv/ocr/pipeline; V=/srv/ml/train-venv/bin/python; R=/srv/
 STAMP=$(date +%Y%m%d-%H%M); OUT=/srv/ocr/models/jt-lora-$STAMP-${EP}ep
 export HF_HOME=/srv/ocr/hf-cache PYTHONUNBUFFERED=1
 say() { echo "$(date '+%F %T') $*"; }
+OLL=$(python3 -c 'import json;print(json.load(open("/srv/ocr/pipeline/config.json"))["ollama_url"].rstrip("/"))')
+SMOKE=/srv/ocr/models/jt-lora-smoke-$STAMP
+# /srv/ocr/models is a symlink to /srv/ml/models, so the container needs both mounts; it runs as root, so its output is handed back
+RUN=(docker run --rm --gpus all --ipc=host -v /srv/ocr:/srv/ocr -v /srv/ml:/srv/ml -w /srv/ocr/scans -e HF_HOME=/srv/ocr/models/hf --entrypoint bash unsloth/unsloth:latest -lc)
+docker_py() { "${RUN[@]}" "python $2; rc=\$?; chown -R $(id -u):$(id -g) $1 2>/dev/null; exit \$rc"; }
+loaded() { curl -s -m 20 $OLL/api/ps | python3 -c 'import json,sys;print(" ".join(x["name"] for x in json.load(sys.stdin).get("models",[])))' 2>/dev/null; }
+unload() { local m; for m in $(loaded); do curl -s -m 60 $OLL/api/generate -d "{\"model\":\"$m\",\"keep_alive\":0}" >/dev/null && say "unloaded $m"; done; }
+gpu_clear() {
+    local i used
+    for i in 1 2 3 4 5 6; do
+        unload; sleep 5
+        used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1 | tr -d ' ')
+        [ "${used:-99999}" -lt 2500 ] && return 0
+        sleep 15
+    done
+    say "GPU still has ${used} MiB in use"; return 1
+}
+# Rerouting a held document on the dashboard calls the reader even while OCR is held, and it then stays loaded for 15-30 min
+guard() { while sleep ${GUARD_EVERY:-30}; do unload; done; }
+venv_smoke() { rm -rf "$SMOKE"; $V train_lora.py --train training/train.jsonl --out "$SMOKE" --limit 8 --max-steps 2 >/tmp/jt-lora-smoke.log 2>&1 && [ -f "$SMOKE/adapter_config.json" ]; }
 cd $SC
 NTR=$(wc -l < training/train.jsonl); NTE=$(wc -l < training/test.jsonl)
 say "JT LoRA fine-tune: $NTR training forms, $NTE test forms, $EP epochs$([ "$MAXS" != 0 ] && echo ", time limit ${MAXS}s")"
-rm -rf /tmp/jt-lora-smoke
-if $V train_lora.py --train training/train.jsonl --out /tmp/jt-lora-smoke --limit 8 --max-steps 2 >/tmp/jt-lora-smoke.log 2>&1 \
-   && [ -f /tmp/jt-lora-smoke/adapter_config.json ]; then
-    say "smoke test passed in the training venv ($(python3 -c "import json;print(json.load(open('/tmp/jt-lora-smoke/train_info.json')).get('secs_per_step'))") s a step)"
+guard & GUARD=$!
+trap 'kill $GUARD 2>/dev/null; rm -rf "$SMOKE"' EXIT
+gpu_clear || { say "GPU not free: JT fine-tune skipped"; exit 1; }
+if venv_smoke || { grep -qs 'does not fit in GPU memory' /tmp/jt-lora-smoke.log && say "smoke test: the GPU was taken, clearing it and trying once more" && gpu_clear && venv_smoke; }; then
+    say "smoke test passed in the training venv ($(python3 -c "import json;print(json.load(open('$SMOKE/train_info.json')).get('secs_per_step'))") s a step)"
     MODE=venv
 else
     say "smoke test in the training venv failed ($(grep -E 'Error|error' /tmp/jt-lora-smoke.log | tail -1 | cut -c1-200)); trying the Unsloth docker image"
-    RUN=(docker run --rm --gpus all --ipc=host -v /srv/ocr:/srv/ocr -w /srv/ocr/scans -e HF_HOME=/srv/ocr/models/hf --entrypoint bash unsloth/unsloth:latest -lc)
-    rm -rf /tmp/jt-lora-smoke
-    if "${RUN[@]}" "python train_lora.py --train training/train.jsonl --out /tmp/jt-lora-smoke --epochs 0.05" >/tmp/jt-lora-smoke-docker.log 2>&1 \
-       && [ -f /tmp/jt-lora-smoke/adapter_config.json ]; then
+    gpu_clear || { say "GPU not free: JT fine-tune skipped"; exit 1; }
+    rm -rf "$SMOKE"
+    if docker_py "$SMOKE" "train_lora.py --train training/train.jsonl --out $SMOKE --limit 8 --max-steps 2" >/tmp/jt-lora-smoke-docker.log 2>&1 \
+       && [ -f "$SMOKE/adapter_config.json" ]; then
         say "smoke test passed in the docker image"; MODE=docker
     else
         say "smoke test failed in the docker image too: JT fine-tune skipped ($(grep -E 'Error|error' /tmp/jt-lora-smoke-docker.log | tail -1 | cut -c1-200))"
         exit 1
     fi
 fi
-rm -rf /tmp/jt-lora-smoke
+rm -rf "$SMOKE"
+gpu_clear || { say "GPU not free: JT fine-tune skipped"; exit 1; }
 t0=$(date +%s)
 if [ $MODE = venv ]; then
     $V train_lora.py --train training/train.jsonl --out $OUT --epochs $EP $([ "$MAXS" != 0 ] && echo "--max-seconds $MAXS") || { say "fine-tuning failed"; exit 1; }
     say "fine-tuned in $(( ($(date +%s) - t0) / 60 )) min; scoring on $NTE test forms"
     $V eval_lora.py --adapter $OUT > $OUT/eval.txt 2>&1 || { say "scoring failed"; tail -3 $OUT/eval.txt; exit 1; }
 else
-    "${RUN[@]}" "python train_lora.py --train training/train.jsonl --out $OUT --epochs $EP" || { say "fine-tuning failed"; exit 1; }
+    docker_py "$OUT" "train_lora.py --train training/train.jsonl --out $OUT --epochs $EP $([ "$MAXS" != 0 ] && echo "--max-seconds $MAXS")" || { say "fine-tuning failed"; exit 1; }
     say "fine-tuned in $(( ($(date +%s) - t0) / 60 )) min; scoring on $NTE test forms"
-    "${RUN[@]}" "python eval_lora.py --adapter $OUT" > $OUT/eval.txt 2>&1 || { say "scoring failed"; tail -3 $OUT/eval.txt; exit 1; }
+    docker_py "$OUT" "eval_lora.py --adapter $OUT" > $OUT/eval.txt 2>&1 || { say "scoring failed"; tail -3 $OUT/eval.txt; exit 1; }
 fi
 sed -n '/^Test forms/,$p' $OUT/eval.txt
 python3 - "$OUT" "$R/training/reports/jt-lora-$STAMP-${EP}ep.json" "$MODE" <<'PY'
