@@ -1,0 +1,7 @@
+[Unit]
+Description=MPS Ronin JT shadow pass, nightly at 21:57 in the gap between route_sort runs
+[Timer]
+OnCalendar=*-*-* 21:57:00
+Persistent=false
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=MPS Ronin JT shadow pass (Dino 10 Nov): the Ronin JT model reads JTs in the background and is scored against RoninStock, nothing is shown or changed
+OnFailure=mps-alert@%n.service
+After=network-online.target
+[Service]
+Type=oneshot
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ml/rjt
+ExecStart=/bin/bash /srv/ocr/pipeline/rjt_shadow_run.sh
+ExecStopPost=/bin/sh -c 'if grep -qs "^rjt shadow" /srv/ocr/scans/pipeline/PAUSE; then rm -f /srv/ocr/scans/pipeline/PAUSE; fi'
+TimeoutStartSec=5400
+KillMode=mixed
+TimeoutStopSec=120
+Nice=5
