@@ -1,0 +1,15 @@
+[Unit]
+Description=MPS one-off (Dino 10 Nov): after the training chain - score the last three A/B checkpoints, write the A/B report, then all OCR back on
+OnFailure=mps-alert@%n.service
+After=network-online.target
+[Service]
+Type=simple
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ml/numbers
+Environment=MPS_OCR_CONFIG=/srv/ocr/pipeline/config.json
+ExecStart=/bin/bash /srv/ocr/pipeline/ab_finish.sh
+RuntimeMaxSec=72h
+KillMode=mixed
+TimeoutStopSec=120
+Nice=5
