@@ -1,0 +1,16 @@
+[Unit]
+Description=MPS one-off (Dino 11 Nov): the JT reader fine-tune redo, 5 epochs overnight, OCR held for the night and back by 07:00
+OnFailure=mps-alert@%n.service
+After=network-online.target
+[Service]
+Type=oneshot
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ocr/scans
+ExecStart=/bin/bash /srv/ocr/pipeline/jt_night.sh
+ExecStopPost=/bin/bash /srv/ocr/pipeline/jt_night.sh --resume
+StandardOutput=append:/srv/ocr/scans/pipeline/training/logs/jt-night.log
+StandardError=append:/srv/ocr/scans/pipeline/training/logs/jt-night.log
+TimeoutStartSec=10h
+KillMode=control-group
+TimeoutStopSec=120

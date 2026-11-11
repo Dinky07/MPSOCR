@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS one-off (Dino 11 Nov): the JT fine-tune redo at 21:00 on Wed 11 Nov, again Thu 12 Nov only if Wednesday's did not finish well
+[Timer]
+OnCalendar=2026-11-11 21:00:00
+OnCalendar=2026-11-12 21:00:00
+Persistent=false
+[Install]
+WantedBy=timers.target
