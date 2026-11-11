@@ -640,13 +640,18 @@ def gpu_read(up_pdf, texts, c, log=None):
         imgs = [base64.b64encode(p.read_bytes()).decode() for p in sorted(tmp.glob("p*.png"))]
         hint = "\n\n".join(f"--- page {i + 1} (OCR text, may contain errors) ---\n{t[:6000]}" for i, t in enumerate(texts[:n]))
         body = {"model": c["gpu_model"], "stream": False, "format": "json", "keep_alive": c["keep_alive"],
-                "options": {"temperature": 0, "num_ctx": int(c["num_ctx"])},
+                "options": {"temperature": 0, "num_ctx": int(c["num_ctx"]),
+                            "num_predict": max(int(c.get("answer_cap_min", 4000)), int(c.get("answer_cap_per_page", 3000)) * max(1, len(imgs)))},   # 684
                 "messages": [{"role": "user", "content": GPU_PROMPT + "\n\n" + hint, "images": imgs}]}
         req = urllib.request.Request(c["ollama_url"].rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
         t0 = time.time()
         with urllib.request.urlopen(req, timeout=int(c["ollama_timeout"])) as r:
-            ans = json.loads(json.loads(r.read())["message"]["content"])
+            resp = json.loads(r.read())
+        if resp.get("done_reason") == "length":          # 684: the model looped; fail now, not at the 15 min timeout
+            raise RuntimeError(f"answer stopped at the {body['options']['num_predict']}-token cap "
+                               f"({round((resp.get('eval_duration') or 0) / 1e9)} s): the model was repeating itself on this page")
+        ans = json.loads(resp["message"]["content"])
         ans["_secs"] = round(time.time() - t0, 1)
         return ans
     finally:

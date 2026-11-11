@@ -457,6 +457,11 @@ def pdf_text(pdf, max_pages):
         return ""
 
 
+def answer_cap(n_pages, cfg):
+    """684: the longest answer Ollama may write for one request (a page the model loops on stops here, not at the timeout)."""
+    return max(int(cfg.get("answer_cap_min", 4000)), int(cfg.get("answer_cap_per_page", 3000)) * max(1, int(n_pages)))
+
+
 def extract_builtin(doc_type, path, cfg, tcfg, hint=None, _small=False):
     """_small: retry mode after Ollama rejects the request (HTTP 400, usually too many/too large images)."""
     max_pages = 1 if _small else int(tcfg.get("max_pages", cfg.get("max_pages_per_doc", 4)))
@@ -487,7 +492,7 @@ def extract_builtin(doc_type, path, cfg, tcfg, hint=None, _small=False):
             "format": SCHEMAS[doc_type],
             "stream": False,
             "keep_alive": cfg.get("keep_alive", "15m"),
-            "options": {"temperature": 0, "num_ctx": int(cfg.get("num_ctx", 16384))},
+            "options": {"temperature": 0, "num_ctx": int(cfg.get("num_ctx", 16384)), "num_predict": answer_cap(len(images), cfg)},
         }
         req = urllib.request.Request(cfg["ollama_url"].rstrip("/") + "/api/chat",
                                      data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
@@ -505,6 +510,9 @@ def extract_builtin(doc_type, path, cfg, tcfg, hint=None, _small=False):
             if not ollama_up(cfg):
                 raise OllamaDown(str(e))
             raise
+        if resp.get("done_reason") == "length":          # 684
+            raise RuntimeError(f"answer stopped at the {body['options']['num_predict']}-token cap "
+                               f"({round((resp.get('eval_duration') or 0) / 1e9)} s): the model was repeating itself on this page")
         content = resp.get("message", {}).get("content", "")
         try:
             return json.loads(content), len(images)
