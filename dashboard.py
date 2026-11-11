@@ -432,6 +432,7 @@ def status(cfg):
 
     worker = read_json(root / "status.json") or {}
     worker["age"] = age_seconds(worker.get("updated_at"))
+    _current_file_info(root, worker.get("current"))
     collector = read_json(root / "collector_status.json") or {}
     collector["age"] = age_seconds(collector.get("updated_at"))
     sync = read_json(root / "sync_status.json") or {}
@@ -627,6 +628,35 @@ OUT_FIELDS = ("supplier_name", "supplier_vat_no", "invoice_number", "invoice_dat
               "cert_no", "cert_type", "material_no", "mill", "purchaser", "mps_po", "ronin_po", "contract", "family",
               "standard", "grade", "grade_summary", "heats_text", "item_count", "heat_count", "heats", "old_columns",
               "sync_mode", "sp_item_id", "heat_check_text")
+
+
+_PAGES = {}
+
+
+def _current_file_info(root, cur):
+    """665: size and pages of the file the worker is reading (work/<Type>__<file>, else in/<Type>/<file>)."""
+    if not isinstance(cur, dict) or not cur.get("file"):
+        return
+    name, t = str(cur["file"]), str(cur.get("type") or "")
+    if "/" in name or "/" in t or name.startswith("."):
+        return
+    for q in (root / "work" / f"{t}__{name}", root / "in" / t / name):
+        try:
+            st = q.stat()
+        except OSError:
+            continue
+        cur["size"] = st.st_size
+        key = (str(q), st.st_mtime)
+        if key not in _PAGES and q.suffix.lower() == ".pdf":
+            try:
+                out = subprocess.run(["pdfinfo", str(q)], capture_output=True, text=True, timeout=5).stdout
+                m = re.search(r"^Pages:\s+(\d+)", out, re.M)
+                _PAGES.clear()
+                _PAGES[key] = int(m.group(1)) if m else None
+            except (OSError, subprocess.SubprocessError):
+                _PAGES[key] = None
+        cur["pages"] = _PAGES.get(key, 1 if q.suffix.lower() != ".pdf" else None)
+        return
 
 
 def _num(x):
@@ -1239,7 +1269,8 @@ _HEAT_CHK = re.compile(r"^heat .+?: (?:\S+ \S+ % is implausible|yield .* >= tens
 
 
 def _heat_num(k, v):
-    v = "" if v is None else str(v).strip().replace(",", ".")
+    v = "" if v is None else str(v).strip().replace(",", ".").replace("%", "").strip()
+    v = re.sub(r"^(?:<=?|\u2264|max\.?)\s*", "", v, flags=re.I)        # 665: 0.51% and <0.01 / max 0.01 as printed
     if v == "":
         return None
     n = _num(v)
@@ -2418,7 +2449,7 @@ function syncNow(sy,stale){
 function ago(s){if(s==null)return"never";if(s<60)return s+"s ago";if(s<3600)return Math.round(s/60)+" min ago";if(s<86400)return Math.round(s/3600)+" h ago";return Math.round(s/86400)+" d ago"}
 async function act(body,msg){
   busy=true;try{const r=await fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF":CSRF},body:JSON.stringify(body)});
-  const j=await r.json();if(r.status==401)return location.reload();if(!j.ok)throw new Error(j.error||"failed");toast(msg||"Done")}
+  const j=await r.json();if(r.status==401)return location.reload();if(!j.ok)throw new Error(j.error||"failed");toast((typeof msg=="function"?msg(j):msg)||"Done");return j}
   catch(e){toast("Error: "+e.message)}finally{busy=false;refresh()}}
 function sw(flag,on,title,disabled){return `<label class="sw" title="${esc(title)}"><input type="checkbox" ${on?"checked":""} ${disabled?"disabled":""}
   onchange="act({action:'set_switch',flag:'${flag}',off:!this.checked},'${esc(title)} '+(this.checked?'on':'off'))"><span></span></label>`}
@@ -2453,7 +2484,11 @@ function render(d){
   const w=d.worker||{},cur=w.current;
   let wx=`<div class="label">${sw("PAUSE",!d.worker_paused,"GPU work")}<span class="small">GPU work ${d.worker_paused?"paused (CPU invoices continue)":"on"}</span></div>`;
   if(w.waiting_for_gpu)wx+=`<div class="small muted">${w.waiting_for_gpu} invoice(s) waiting for the GPU</div>`;
-  if(cur)wx=`<div class="small" style="margin-top:6px">Now: <b>${esc(cur.file)}</b> <span class="muted">(${esc(cur.type)})</span></div>`+wx;
+  if(cur){const rs=cur.started?Math.max(0,(Date.now()-new Date(cur.started))/1000):null,slow=rs!=null&&rs>1800;   // 665: size, pages, running time
+    const sz=cur.size==null?"":cur.size>=1048576?(cur.size/1048576).toFixed(1)+" MB":Math.max(1,Math.round(cur.size/1024))+" KB";
+    const bits=[sz,cur.pages?cur.pages+(cur.pages>1?" pages":" page"):"",rs!=null?"running "+dur(rs):""].filter(Boolean).join(" · ");
+    wx=`<div class="small" style="margin-top:6px">Now: <b>${esc(cur.file)}</b> <span class="muted">(${esc(cur.type)})</span></div>`
+      +(bits?`<div class="small ${slow?"":"muted"}" ${slow?'style="color:var(--bad);font-weight:600"':""} title="started ${esc(String(cur.started||"").replace("T"," ").slice(0,19))}">${bits}${slow?" - may be stuck":""}</div>`:"")+wx}
   else if(w.last_done)wx=`<div class="small muted" style="margin-top:6px">Last: ${esc(w.last_done.file)} · ${ago(Math.round((Date.now()-new Date(w.last_done.at))/1000))}</div>`+wx;
   const c=d.collector||{},srcs=Object.entries(c.sources||{});
   let cx=d.collector_configured?srcs.map(([k,v])=>`<div class="small"><span class="dot ${v.state=="ok"?"ok":v.state=="off"?"":"bad"}"></span> ${esc(k)}: ${esc(v.state)}${v.last_scan?" · scanned "+ago(Math.round((Date.now()-new Date(v.last_scan))/1000)):""}</div>`).join("")
@@ -2606,7 +2641,7 @@ const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_n
   ws:[["MPS DWG","mps_dwg_no",0,1],["Job","job_number"],["Sheet","sheet"],["Date","date"],["Project","project",0,0,"wrap"],["Corrosion int","corrosion_int"],
     ["Corrosion ext","corrosion_ext"],["Spec","spec"],["Batch","batch_no"],["Customer DWG","customer_dwg_no"],["QA stamp","stamp_text",0,0,"wrap"],["Checked","checked",0,0,"tick"]],
   test_cert:[["Cert no","cert_no",0,1],["Family","family"],["Date","date"],["Mill","mill",0,0,"wrap"],["MPS PO","mps_po"],["Ronin PO","ronin_po"],
-    ["Type","cert_type"],["Heats","heats_text",0,0,"wrap"],["Checked","checked",0,0,"tick"]]};
+    ["Type","cert_type"],["Heats","heats_text",0,1,"wrap"],["Checked","checked",0,0,"tick"]]};      // 665: edit heats in the table below
 const ALIAS={order_number:"po_number",supplier:"supplier_name"};      // older sidecars (generic reader)
 const DT={CustomerOrders:"co",SalesQuotes:"sq",OtherDocuments:"od",ReleaseNotes:"rn",SupplierInvoices:"supplier_invoice",SupplierInvoicesArchive:"supplier_invoice",PurchaseOrders:"po",PolymerOrders:"pl",RoninOrders:"po",ProofOfPayments:"pop",JobTransfers:"jt",RoninJobTransfers:"jt",DeliveryNotes:"dn",WorkshopSheets:"ws",TestCerts:"test_cert"};
 const money=v=>v==null||v===""?"":(+v).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -2941,7 +2976,7 @@ $("#outq").addEventListener("click",async e=>{
       let heats=null;const ht=box.querySelector("table.heats tbody");
       if(ht)heats=[...ht.querySelectorAll("tr[data-heat]")].map(tr=>{const o={_i:tr.dataset.heat};tr.querySelectorAll("[data-h]").forEach(el=>o[el.dataset.h]=el.value);return o});
       b.disabled=true;
-      await act({action:"edit",type:box.dataset.type,name:box.dataset.name,held:box.dataset.held=="1",fields,items,heats},"Saved");
+      await act({action:"edit",type:box.dataset.type,name:box.dataset.name,held:box.dataset.held=="1",fields,items,heats},j=>j.changed===0?"Nothing to save: no change was picked up":"Saved");   // 665
       editing=null;await loadOut();return}
   }
   if(b&&b.dataset.act=="delete"){e.stopPropagation();
