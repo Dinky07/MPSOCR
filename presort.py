@@ -35,7 +35,7 @@ try:
 except Exception:                         # pragma: no cover
     ws_reader = None
 
-VERSION = "presort-8 (4 Nov: credit applications, Ivor Crabbia Family Trust)"
+VERSION = "presort-9 (11 Nov: Dino's 629 dashboard moves - test certs, invoices, drawings, inspection reports, customer orders)"
 KINDS = {
     "purchase_order": "PurchaseOrders", "polymer_order": "PurchaseOrders", "pro_forma": "PurchaseOrders",
     "quotation": "PurchaseOrders", "statement": "PurchaseOrders", "credit_note": "PurchaseOrders",
@@ -43,12 +43,16 @@ KINDS = {
     "ronin_order": "RoninOrders",
     "supplier_invoice": "SupplierInvoices", "delivery_note": "DeliveryNotes", "proof_of_payment": "ProofOfPayments",
     "workshop_sheet": "WorkshopSheets", "job_transfer": "JobTransfers", "test_cert": "TestCerts",
+    "customer_order": "CustomerOrders",
 }
 # presort-6: kinds that belong in Other Documents (category = Dino's folder); no queue, so the worker never routes them
 OD_CATEGORY = {"id_document": "ID", "drivers_licence": "Drivers Licence", "vehicle_handover": "Vehicle Handover",
                "vehicle_registration": "Vehicle RC1", "collection_slip": "Collection Slips", "saheti": "Saheti",
                "letter": "Letter", "medical": "Medical",
-               "credit_application": "Credit Applications", "icft": "Ivor Crabbia Family Trust"}
+               "credit_application": "Credit Applications", "icft": "Ivor Crabbia Family Trust",
+               # presort-9: Dino files supplier quotations / pro formas and supplier delivery notes here (131 + 30 moves)
+               "quotation": "Quotations", "supplier_delivery_note": "Supplier Delivery Notes",
+               "inspection_report": "Inspection Reports"}
 SQ_KINDS = {"sales_quotation"}                             # 471b: to Sales Quotes (read there as a quote)
 COMMON = re.compile(r"\b(THE|AND|FOR|DATE|TOTAL|VAT|TEL|PAGE|INVOICE|ORDER|NUMBER|QTY|DESCRIPTION|AMOUNT|PRICE|NAME|ADDRESS|SIGNATURE|PTY|LTD)\b")
 
@@ -163,6 +167,14 @@ def verdict(pdf, name=None, folder=None, texts=None):
             and not has(r"\bPRO ?-?FORMA\b|\bQUOTATION\b|\bCREDIT NOTE\b|\bSTATEMENT\b|\bDELIVERY NOTE\b|\bPURCHASE ORDER\b|\bORDER (NO|NUMBER)\b", T) \
             and (inv_no or has(r"\bBILL TO\b|\bINVOICE (DATE|NUMBER|NO)\b|\bDOCUMENT NO\b")):
         votes.append(("supplier_invoice", "likely", "tax / warranty invoice below the title + supplier VAT + invoice no"))
+    # presort-9: a plain INVOICE title (no TAX) with an invoice number, supplier VAT or billing block
+    if not any(k == "supplier_invoice" for k, _, _ in votes) and has(r"\bINVOICE\b", T) and not own_head \
+            and not has(r"\bPRO ?-?FORMA\b|QUOT\s?ATION|\bQUOTE\b|\bESTIMATE\b|NOT A (VAT|TAX) INVOICE|\bSTATEMENT\b|\bCREDIT NOTE\b"
+                        r"|\bPURCHASE ORDER\b|\bDELIVERY NOTE\b|\bCERTIFICAT", T) \
+            and (vat or inv_no or has(r"\bINVOICE ?(#|NO\b|NUMBER\b)|\bINV ?-?\d{1,8}\b|\bBILL(ING)? (TO|ADDRESS)\b|\bDUE DATE\b")):
+        votes.append(("supplier_invoice", "likely", "title: invoice + invoice no / supplier VAT / billing"))
+    if has(r"\bESTIMATE\b", T) and not has(r"\bTAX INVOICE\b|\bINVOICE ?(#|NO\b|NUMBER\b)", T):
+        votes.append(("quotation", "likely", "title: estimate"))
     if has(r"\bCREDIT NOTE\b", T):
         votes.append(("credit_note", "likely", "title: credit note"))
     if has(r"\bQUOTATION\b|\bQUOTE\b", T) and not has(r"\bTAX INVOICE\b", T):
@@ -171,14 +183,32 @@ def verdict(pdf, name=None, folder=None, texts=None):
         votes.append(("statement", "likely", "title: statement + ageing/balance"))
     if has(r"\bJOB TRANSFER\b", T):
         votes.append(("job_transfer", "sure" if has(r"\bJT ?\d{4,6}\b|\bTRANSFER(RED)? (FROM|TO)\b") else "likely", "title: job transfer"))
-    if has(r"\b(INSPECTION|MILL TEST|MATERIAL TEST|TEST) CERTIFICATE\b|\bCERTIFICATE OF (CONFORMITY|COMPLIANCE)\b", T) and heat:
-        votes.append(("test_cert", "likely", "title: certificate + heat / EN 10204"))
+    # presort-9: plural / OCR-damaged titles, CERTIFICATE OF INSPECTION, and the mill-cert body wording besides heat numbers
+    en10204 = has(r"[E£]N ?1020 ?4")
+    tc_title = has(r"\b(INSPECTION|MILL ?TEST|MATERIALS? ?TEST|TEST|QUALITY|PRODUCT) CERTI\w{0,3}CATES?\b"
+                   r"|\bCERTIFICATE OF (INSPECTION|QUALITY|CONFORMITY|COMPLIANCE|ANALYSIS|TEST)\b|\bINSPECTION CERTI\w*|\bTEST CERTS?\b", T)
+    tc_body = heat or en10204 or has(r"\bASTM ?A ?\d{2,4}\b|\bAPI ?5L\b|\bASME ?S?A ?\d{2,4}\b|\bTENSILE\b|\bYIELD\b|\bCHEMICAL COMPOSITION\b")
+    tc_invoiceish = has(r"\bTAX INVOICE\b|\bQUOTATION\b|\bPRO ?-?FORMA\b|\bSTATEMENT\b", T)   # certs print "PURCHASE ORDER NO"
+    if (tc_title and tc_body or has(r"\bCERTIFICAT\w*", T) and en10204) and not tc_invoiceish:
+        votes.append(("test_cert", "likely", "title: certificate + " + ("heat / EN 10204" if heat or en10204 else "mill-cert wording")))
+    if not (tc_title or en10204 or heat) and not tc_invoiceish and not has(r"\bMOTOR ?VEHICLE\b|\bRC ?[1I]\b|\bVOERTUIG") \
+            and has(r"\bTHIS IS TO CERTIFY\b|\bTEST REPORT\b|\bPRESSURE TEST(ING)?\b|\bINTEGRITY TESTING\b|\bINSPECTION REPORT\b"
+                    r"|\bPRESSURE VESSEL CERTIFICATION\b|\bCERTIFICATE OF REGISTRATION\b", T) and not has(r"\bQUOT|\bINVOICE\b|\bDEAR\b", T):
+        votes.append(("inspection_report", "likely", "inspection / test report or registration certificate"))
     if has(r"\bDELIVERY NOTE\b|\bWAYBILL\b|\bGOODS RECEIVED\b", T) and not codes and not has(r"\bTAX INVOICE\b", T) \
             and not has(r"\bCERTIFICAT", T):                # presort-5b: certificates quote the delivery note number
         if has(r"\bMINING PRESSURE SYSTEMS\b", T) and has(r"\bIN ?\d{5,7}\b"):
             votes.append(("delivery_note", "likely", "title: MPS delivery note, IN number, no barcode read"))
         else:
             votes.append(("supplier_delivery_note", "likely", "title: delivery note"))
+    elif (has(r"\bTANK DIP (BEFORE|AFTER)\b") or has(r"\bDELIVE\s+RY NOTE\b", T)) and not has(r"\bTAX INVOICE\b", T):
+        votes.append(("supplier_delivery_note", "likely", "fuel delivery note (tank dip) / split DELIVERY NOTE title"))
+    # presort-9: a customer's purchase order to us (Dino's Customer Orders moves): their letterhead, our name as supplier
+    if has(r"\bPURCHASE ORDER\b", T) and not own_head and not mps_form and not tc_title and not has(r"CERTIFIC", T) \
+            and has(r"\bMINING PRESSURE SYS|\bKUSASA\b") \
+            and not has(r"\bTAX INVOICE\b|\bINVOICE\b|\bQUOTATION\b|\bPRO ?-?FORMA\b|ACKNOWLEDG|CONFIRMATION|\bSTATEMENT\b", T) \
+            and has(r"\bDELIVER(Y)? (TO|ADDRESS)\b|\bORDER (NUMBER|NO|DATE)\b|\bP\.?O\.? ?(NUMBER|NO)\b|\bDOCUMENT NO\b"):
+        votes.append(("customer_order", "likely", "a customer's purchase order to MPS"))
     ronin_head = (has(r"TILE\s*&\s*ALL\s*BLACK", T) or has(r"\b4570132524\b") or has(r"\bRONIN\b", T)
                   or has(r"\bFL\w{2,5}S\s+(AND|&)\s+F\w{4,6}S\b", T))
     ronin_df = re.search(r"\bORDER\s*:?\s*[DP]F\s*-?\s*(\d{4})\b", B)
@@ -193,8 +223,11 @@ def verdict(pdf, name=None, folder=None, texts=None):
     # presort-7: workshop sheet forms the drawing check misses (handwritten ones, printed title blocks)
     wsw = [w for w, p in (("sheet x of y", r"\b(SHEET|SHT)\.? ?:? ?\d{1,2} ?(OF|-) ?\d{1,2}\b"), ("destination", r"\bDESTINATION\b"),
                           ("corrosion", r"\bCORROSION ?(INT|EXT)"), ("issued for construction", r"ISSUED FOR CONSTRUCTION|\bQ ?A APPROVED\b"),
-                          ("MPS dwg", r"\bMPS DWG\b")) if has(p)]
-    if len(wsw) >= 2 and not has(r"\bTAX INVOICE\b|\bQUOTATION\b|\bPRO ?-?FORMA\b|\bSTATEMENT\b|\bCERTIFICATE\b|\bREQUISITION\b", T) \
+                          ("MPS dwg", r"\bMPS DWG\b"),
+                          # presort-9: the drawing title block (Dino's Workshop Sheets moves)
+                          ("project", r"\bPRO[JY]ECT\s*[:~\"-]"), ("job", r"\bJOB\s*(NO\.?)?\s*[:)]"), ("dwg no", r"\bDWG\.? ?NO\b")) if has(p)]
+    if len(wsw) >= 2 and not has(r"\bTAX INVOICE\b|\bQUOTATION\b|\bPRO ?-?FORMA\b|\bSTATEMENT\b|\bCERTIFICATE\b|\bREQUISITION\b"
+                                 r"|\bINVOICE\b|\bPURCHASE ORDER\b|\bDELIVERY NOTE\b|\bJOB TRANSFER\b", T) and not mps_form \
             and not heat and not has(r"CERTIFICAT|\bMILL\b|CHEMICAL|\bTENSILE\b"):
         votes.append(("workshop_sheet", "likely", "workshop sheet form (" + ", ".join(wsw) + ")"))
     if has(r"\bOEM LETTER\b|\bDECLARATION BY PRODUCER\b") and has(r"\bRULES OF ORIGIN\b|\bHEREBY DECLARE\b|\bPRODUCER\b"):
@@ -246,7 +279,7 @@ def verdict(pdf, name=None, folder=None, texts=None):
     lic = has(r"\bDRIVING LICEN[CS]E\b|\bVEHICLE RESTRICTIONS?\b", T)     # not "licence no": a pro forma had one
     if not handover and (lic or re.search(r"\bDRIVERS?'?S? ?LICEN[CS]E\b", str(name or pdf.name).upper())):
         votes.append(("drivers_licence", "likely", "driving licence" + ("" if lic else " (file name)")))
-    if has(r"\bCOLLECTION SLIP\b", T):
+    if has(r"\bCOLLECTION SLIP\b", T) or has(r"\bOPTIMUM RECYCLING\b") and has(r"\bSLIP\b"):
         votes.append(("collection_slip", "likely", "title: collection slip"))
 
     # 471b: a doctor's statement / invoice is medical, an OEM letter is a letter, our own quote is a sales quote,
