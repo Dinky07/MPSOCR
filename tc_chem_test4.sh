@@ -26,8 +26,14 @@ for i in $(seq 1 240); do [ -e $R/PAUSE ] || break; sleep 30; done      # anothe
 OWN=0; [ -e $R/PAUSE ] || { echo "tc reader chemistry test 701" > $R/PAUSE; OWN=1; say "worker paused"; }
 release() { [ $OWN = 1 ] && rm -f $R/PAUSE && say "worker resumed"; OWN=0; }
 trap release EXIT
-for i in $(seq 1 360); do [ "$(cur)" = "None" ] && break; sleep 5; done
-[ "$(cur)" = "None" ] || { say "worker still on a page after 30 min: test skipped"; exit 0; }
+idle() {   # 701: paused inside a file the worker keeps "current" set and sleeps between pages (time.sleep(5) loop)
+  [ "$(cur)" = "None" ] && return 0
+  local pid k; pid=$(systemctl show -p MainPID --value mps-ocr-worker)
+  for k in 1 2 3; do [ "$(cat /proc/$pid/wchan 2>/dev/null)" = "hrtimer_nanosleep" ] || return 1; sleep 4; done
+  return 0
+}
+for i in $(seq 1 360); do idle && break; sleep 5; done
+idle || { say "worker still on a page after 30 min: test skipped"; exit 0; }
 systemctl is-active --quiet mps-ocr-training.service mps-numbers-redo.service mps-numbers-weekly.service && { say "training running: test skipped"; exit 0; }
 say "worker idle"
 [ "$(md5sum < $P/tc_reader.py | cut -c1-32)" = "dcea4e39dcba9b41ca528f06321257bb" ] || { say "tc_reader.py changed since the test was set up: test skipped"; exit 0; }
