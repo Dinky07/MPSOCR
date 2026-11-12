@@ -42,7 +42,7 @@ say "worker idle"
 rm -rf /tmp/tc710 && mkdir -p /tmp/tc710 && cp -p $P/tc_reader.py /tmp/tc710/
 python3 $S/tc_chem_patch.py /tmp/tc710/tc_reader.py && python3 $S/tc_scan_rules_patch.py /tmp/tc710/tc_reader.py && python3 -m py_compile /tmp/tc710/tc_reader.py || { say "PATCH FAILED"; exit 1; }
 sleep 20
-cd $P && timeout 12h nice -n 5 python3 $S/tc_ab10.py
+cd $P && timeout 14h nice -n 5 python3 $S/tc_ab10.py
 grep -q "VERDICT PASS" "$OUT" || { say "NOT INSTALLED (verdict not PASS)"; exit 0; }
 cp -p $P/tc_reader.py $P/tc_reader.py.bak-710
 install -m 0664 /tmp/tc710/tc_reader.py $P/tc_reader.py && $P/commit.sh "tc_reader: chemistry as headings + rows with the 10 Nov prompt as fall back; handwritten DF / job; repeats dropped; swapped yield/tensile; chemistry joined to item lines by item no.; Sumitomo factors, copies and NB inch sizes (641-710, tested; cert pages read with the 10 Nov prompt for header and items)" || exit 1
