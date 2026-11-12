@@ -1,7 +1,7 @@
 [Unit]
-Description=MPS purchase orders: feed the next 1,000 archive orders (Mon-Fri 03:00)
+Description=MPS purchase orders: feed the next 2,000 archive orders (daily 03:00, Dino 12 Nov)
 [Timer]
-OnCalendar=Mon..Fri 03:00:00
+OnCalendar=*-*-* 03:00:00
 Persistent=true
 Unit=mps-po-feed.service
 [Install]

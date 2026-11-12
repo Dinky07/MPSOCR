@@ -1,9 +1,9 @@
 [Unit]
 OnFailure=mps-alert@%n.service
-Description=MPS purchase orders: feed the next 1,000 archive orders
+Description=MPS purchase orders: feed the next 2,000 archive orders
 [Service]
 Type=oneshot
 User=dinoc
 WorkingDirectory=/srv/ocr/pipeline
-ExecStart=/usr/bin/python3 /srv/ocr/pipeline/feed_po.py --batch 1000
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/feed_po.py --batch 2000
 TimeoutStartSec=2h
