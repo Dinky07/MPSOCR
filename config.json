@@ -225,14 +225,15 @@
       "doc_type": "test_cert",
       "label": "Test Certificates",
       "split_pages": false,
-      "max_pages": 30,
+      "max_pages": 400,
       "tc_reader": {
         "model": "qwen3-vl:8b-instruct",
         "fewshot_dir": "",
         "px": 1600,
         "chem_px": 2000,
-        "max_pages": 30
-      }
+        "max_pages": 400
+      },
+      "_note_718": "13 Nov: 30 -> 400 (Dino: scans of 30-300 pages were read only to page 30)"
     },
     "ReleaseNotes": {
       "doc_type": "release_note",

@@ -46,6 +46,7 @@ cd $P && timeout 14h nice -n 5 python3 $S/tc_ab10.py
 grep -q "VERDICT PASS" "$OUT" || { say "NOT INSTALLED (verdict not PASS)"; exit 0; }
 cp -p $P/tc_reader.py $P/tc_reader.py.bak-710
 install -m 0664 /tmp/tc710/tc_reader.py $P/tc_reader.py && $P/commit.sh "tc_reader: chemistry as headings + rows with the 10 Nov prompt as fall back; handwritten DF / job; repeats dropped; swapped yield/tensile; chemistry joined to item lines by item no.; Sumitomo factors, copies and NB inch sizes (641-710, tested; cert pages read with the 10 Nov prompt for header and items)" || exit 1
+python3 $S/tc_postpass_reread719.py --apply 2>&1 | sed "s/^/  719 re-read: /"    # Dino 13 Nov: re-read the 13 Nov Test Cert re-reads with the new reader
 sudo -n /usr/bin/systemctl restart mps-ocr-worker.service && say "installed; worker restarted" || say "installed; worker NOT restarted"
 sleep 10
 release
