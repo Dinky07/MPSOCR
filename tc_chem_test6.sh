@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# 701 (Dino 11 Nov "fix and re-test"; the 643 test lost chemistry on Xinfeng / Jinan Rich / newer Huitong forms and its scorer
+# crashed): the test-cert reader with chemistry headings + rows, a fall back to the 10 Nov prompt on pages that answer fails on,
+# the Sumitomo factor legend, copies with a letter of the number off, NB8 = 8 inch (tc_chem_patch.py, tc_scan_rules_patch.py)
+# against the live reader (tc_ab9.py: + 5 Sumitomo pages). Unit mps-tc-chem4: waits for another job's pause to end, pauses the
+# worker (after its current page), tests, resumes it.
+# On PASS: installs tc_reader.py and restarts the worker while it is paused. Nothing is re-read (Dino's call).
+# 710 (Dino 12 Nov: the 701 test lost item lines on the controls - "find and fix ... retest on the weekend"): the same test
+# (tc_ab10.py) with cert pages read with both prompts (tc_hybrid710_patch.py). Unit mps-tc-chem5, Sat 14 Nov 06:00.
+# 727 (Dino 14 Nov: the 710 test failed on cert_no and grade, "have a look into the pages that got worse"): the same test
+# (tc_ab11.py) with tc_fix727_patch.py in the chain. Unit mps-tc-chem6.
+# Report: reports/tc reader chemistry and scan rules test <the day it runs>.txt
+set -uo pipefail
+P=/srv/ocr/pipeline; R=/srv/ocr/scans/pipeline; S=$R/_src/run/staged/code
+OUT="$R/reports/tc reader chemistry and scan rules test $(date +%F).txt"
+exec > >(tee -a "$OUT") 2>&1
+say() { echo "$(date '+%F %T') $*"; }
+cur() { python3 -c "import json;print(json.load(open('$R/status.json')).get('current'))"; }
+busy() {
+  [ "$(find $R/in -maxdepth 2 -name '*.pdf' -not -path '*/CustomerOrders/*' | wc -l)" -gt 0 ] && return 0
+  [ "$(cur)" != "None" ] && return 0
+  [ -e $R/PAUSE ] && return 0
+  [ "$(systemctl show -p ActiveState --value mps-jt-fix.service)" = "activating" ] && return 0
+  systemctl is-active --quiet mps-numbers-redo.service mps-numbers-weekly.service mps-ocr-training.service mps-po-import.service && return 0
+  return 1
+}
+say "chemistry test-cert reader test (727, Dino 14 Nov: the worse pages fixed): pausing the worker"
+for i in $(seq 1 240); do [ -e $R/PAUSE ] || break; sleep 30; done      # another job's pause (the Sumitomo check 700)
+[ -e $R/PAUSE ] && { say "the worker stayed paused by another job for 2 h: test skipped"; exit 0; }
+OWN=0; [ -e $R/PAUSE ] || { echo "tc reader chemistry test 727" > $R/PAUSE; OWN=1; say "worker paused"; }
+release() { [ $OWN = 1 ] && rm -f $R/PAUSE && say "worker resumed"; OWN=0; }
+trap release EXIT
+idle() {   # 701: paused inside a file the worker keeps "current" set and sleeps between pages (time.sleep(5) loop)
+  [ "$(cur)" = "None" ] && return 0
+  local pid k; pid=$(systemctl show -p MainPID --value mps-ocr-worker)
+  for k in 1 2 3; do [ "$(cat /proc/$pid/wchan 2>/dev/null)" = "hrtimer_nanosleep" ] || return 1; sleep 4; done
+  return 0
+}
+for i in $(seq 1 360); do idle && break; sleep 5; done
+idle || { say "worker still on a page after 30 min: test skipped"; exit 0; }
+systemctl is-active --quiet mps-ocr-training.service mps-numbers-redo.service mps-numbers-weekly.service && { say "training running: test skipped"; exit 0; }
+say "worker idle"
+[ "$(md5sum < $P/tc_reader.py | cut -c1-32)" = "dcea4e39dcba9b41ca528f06321257bb" ] || { say "tc_reader.py changed since the test was set up: test skipped"; exit 0; }
+rm -rf /tmp/tc727 && mkdir -p /tmp/tc727 && cp -p $P/tc_reader.py /tmp/tc727/
+python3 $S/tc_chem_patch.py /tmp/tc727/tc_reader.py && python3 $S/tc_scan_rules_patch.py /tmp/tc727/tc_reader.py && python3 -m py_compile /tmp/tc727/tc_reader.py || { say "PATCH FAILED"; exit 1; }
+sleep 20
+cd $P && timeout 14h nice -n 5 python3 $S/tc_ab11.py
+grep -q "VERDICT PASS" "$OUT" || { say "NOT INSTALLED (verdict not PASS)"; exit 0; }
+cp -p $P/tc_reader.py $P/tc_reader.py.bak-727
+install -m 0664 /tmp/tc727/tc_reader.py $P/tc_reader.py && $P/commit.sh "tc_reader: chemistry as headings + rows with the 10 Nov prompt as fall back; handwritten DF / job; repeats dropped; swapped yield/tensile; chemistry joined to item lines by item no.; Sumitomo factors, copies and NB inch sizes (641-727, tested; cert pages read with the 10 Nov prompt for header and items)" || exit 1
+python3 $S/tc_postpass_reread719.py --apply 2>&1 | sed "s/^/  719 re-read: /"    # Dino 13 Nov: re-read the 13 Nov Test Cert re-reads with the new reader
+sudo -n /usr/bin/systemctl restart mps-ocr-worker.service && say "installed; worker restarted" || say "installed; worker NOT restarted"
+sleep 10
+release

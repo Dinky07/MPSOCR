@@ -1,0 +1,8 @@
+[Unit]
+Description=MPS one-off: starts the staged Test Cert re-read (728) once the new reader is installed; checks every 10 minutes
+[Timer]
+OnCalendar=*:07/10
+Persistent=false
+Unit=mps-tc-reread728.service
+[Install]
+WantedBy=timers.target

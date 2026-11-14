@@ -1,0 +1,12 @@
+[Unit]
+Description=MPS one-off (Dino 14 Nov "Yes, update in place", 728): the 28 Test Cert sources read again with the new reader into work/tc_reread728 (staged only; does nothing until the new reader is installed)
+OnFailure=mps-alert@%n.service
+[Service]
+Type=oneshot
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/usr/bin/python3 /srv/ocr/pipeline/tc_reread728.py
+ExecStopPost=/bin/sh -c 'if grep -qs "^tc reread 728" /srv/ocr/scans/pipeline/PAUSE; then rm -f /srv/ocr/scans/pipeline/PAUSE; fi'
+TimeoutStartSec=infinity
+Nice=5

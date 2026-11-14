@@ -1,0 +1,10 @@
+[Unit]
+Description=MPS one-off (Dino 14 Nov "Yes, Sunday 06:00", 727): re-test of the test-cert reader with the 727 fixes (worker paused); installed only on PASS
+OnFailure=mps-alert@%n.service
+[Service]
+Type=oneshot
+User=dinoc
+Group=dinoc
+WorkingDirectory=/srv/ocr/pipeline
+ExecStart=/bin/bash /srv/ocr/pipeline/tc_chem_test6.sh
+TimeoutStartSec=15h
