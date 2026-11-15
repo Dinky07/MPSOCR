@@ -27,7 +27,7 @@ except Exception:                          # pragma: no cover
     po_reader = None
 
 FEWSHOT_DIR = os.path.join(HERE, "tc_fewshot")
-NUM_PREDICT = 6144
+NUM_PREDICT = 12288                                   # 694: long flange certs were cut off at 6144
 FAMILIES = ("Pipe", "Flanges", "Fittings", "Plate", "Mixed", "Other")          # 532: Plate
 
 PROMPT = '''You are reading ONE PAGE of a file of steel test certificates bought by Mining Pressure Systems (MPS) or
@@ -44,7 +44,7 @@ leave every other field null or empty.
 
 Header fields (as printed; null when not on this page). Where a name is printed in Chinese and English, give the English.
 - cert_no: the certificate number ("No.", "Cert No", "Certificate No", "Certificate Reference No", "CERTIFI.NO").
-  Never return the label itself: if the "No." box is empty, cert_no is null.
+  Never return the label itself or the inspection standard (EN10204-3.1): if the "No." box is empty, cert_no is null.
 - material_no: a separate material / product number when printed (ArcelorMittal: "Material No").
 - cert_type: "3.1", "3.2", "2.2" or "inspection" (EN10204 3.1B counts as 3.1); it may only be in a remark or footer.
 - date_as_written / date_iso: the certificate (issue) date - may be in the footer ("Date of Release", "Filling date
@@ -60,12 +60,19 @@ Header fields (as printed; null when not on this page). Where a name is printed 
   ("Documentary Credit Number: IL16341ZA0704992"), exactly as printed, each with its label:
   [{"label": "ORDER NO", "value": "DF0906"}, {"label": "Contract No", "value": "A41249"}].
   MPS orders look like A41249, Ronin orders like DF0906, contracts like CNZAN20188GS-1.
+- handwritten: numbers written BY HAND in pen at the top of the page, usually top right outside the printed frame:
+  {"orders": [each order number as written, such as "DF2843" or "A49797"; a page can have two; leave out any that is
+  crossed out], "job": an MPS job number as written, such as "32245E" or "C3124", or null}; "order 68525 job 5435" gives
+  orders ["68525"] and job "5435". Printed text never goes here.
+- size_unit: "inch" when the item table's size column heading says inches ("Product & Size (Inch)", "NPS", "SIZE (IN)"),
+  "mm" when it says mm, DN or NB, else null.
 - product: e.g. "SEAMLESS CARBON STEEL PIPE", "FLANGES", "BUTT WELDING FITTINGS".
 - standard: the specification(s) as printed ("ASTM A106 B / API 5L X42 PSL-1", "SANS 1123", "ASTM A234 WPB").
 - grade: the steel grade (X42, Gr.B, S355JR, WPB, A105, 316L).
 
 items: one entry per PRODUCT line (the item / size / product list - not a test-summary row). A size that continues
-on the next row with no new qty is ONE line:
+on the next row with no new qty is ONE line. A product named in a section row above its sizes ("SGP ELBOW 90D LR",
+"SGP TEE") belongs to every size row under it:
   {"line": number|null, "product": "Pipe|Flange|Elbow 90|Elbow 45|Bend|Tee|Reducer|Cap|Stub end|...",
    "description": text as printed, "size_text": size as printed ("219.1*12.7*12.192", "2 1/2\\"", "250NB", "DN50"),
    "size2_text": second size for reducers/tees or null, "od_mm": number|null, "wt_text": wall thickness or schedule as
@@ -77,18 +84,29 @@ on the next row with no new qty is ONE line:
    "batch": a batch / lot / MFG / work number for this line, or null}
   A size string like "8\\"*XXS*9.144" or "14\\"(355.6)*S40(11.13)*12192" is SIZE * WALL * LENGTH: 9.144 / 12192 is
   the length (m / mm), never the wall thickness.
-heats: one entry per heat (cast / charge / melt) number with its chemistry and mechanical results.
-  Read each chemistry value from the column whose HEADING is that element: mills order the columns differently
-  (C Si Mn P S, C Mn Si P S, C Si Mn S P Cr V Mo Ni Cu ...). When the table has a heat / ladle / melting row (L, R,
-  "Heat") and a product row (P, C, "Product"), give the heat row.
+heats: one entry per heat (cast / charge / melt) number with its chemistry and mechanical results. When the chemistry or
+mechanical rows are keyed by a line number, lot, batch or specimen number, find that row's heat through the item table
+(the same number on the item row) and give the heat as heat_no: a lot, batch, specimen or coil number is never a heat.
+  Chemistry: copy the chemistry table's column headings ONCE per page into "chem_columns", left to right exactly as
+  printed, one entry per element column: {"el": the element as printed (C, Si, Mn, P, S, Cr, Ni, Mo, Cu, V, Nb, Ti, Al,
+  N, B, CE ...), "factor": the multiplier printed with that heading ("x100", "*1000", "X10-3" -> 100, 100, 1000) or
+  null}. Mills order the columns differently (C Si Mn P S / C Mn S P Si / C Si Mn S P ...): copy THIS page's order.
+  Headings stacked in two rows: the upper row left to right, then the lower row. A row of small numbers under the
+  headings with a legend ("2: x10-2, 3: x10-3") gives each column's factor: copy that small number (2, 3) as its factor. Elements may be spelled out (CARBON,
+  COLUMBIUM = Nb). Factors given in a legend by marks under the headings ("*2: X1000  *3: X10000  OTHER: X100",
+  Sumitomo): each column takes the factor of its mark, and the unmarked columns the OTHER factor.
+  Each heat's "chem_row" is its result row read left to right, one value per chem_columns entry, exactly as printed
+  (0.004 stays 0.004; 19 under "x100" stays 19), null for a blank or "-" cell. When the table has a heat / ladle /
+  melting row (L, R, "Heat") and a product row (P, C, "Product"), give the heat row.
   One mech entry per result row or pair ("(1) Actual", "(2) Actual", "363/364" = two entries). When mechanical rows
   carry no heat number they follow the heats in the order the certificate lists them, including heats listed on
   earlier pages (named below the prompt when there are any).
-  {"heat_no": text, "grade": text|null,
-   "chem_multiplier": {"C": 100, "P": 1000, ...} ONLY when the column heading shows a factor such as "*100" or "x1000",
-   "chem": {"C": number, "Si": number, "Mn": number, "P": number, "S": number, "Cr": ..., "Ni": ..., "Mo": ..., "Cu": ...,
-            "V": ..., "Nb": ..., "Ti": ..., "Al": ..., "N": ..., "B": ..., "Ceq": ...} - the RESULT row for that heat,
-            numbers exactly as printed (do not apply the factor yourself); skip the spec min / max rows,
+  When the chemistry table is keyed by an ITEM NO. column and gives a material charge number instead of the item
+  table's heat number (Shanghai Gateway: item 101 -> charge 09109615), give heat_no as printed on the chemistry row and
+  its item number as "item_line"; the code joins the row to that item.
+  {"heat_no": text, "grade": text|null, "item_line": number|null,
+   "chem_row": [number|null, ...] - the RESULT row, one value per chem_columns entry, in the same order; skip the
+            spec min / max rows,
    "mech": [{"yield": number|null, "tensile": number|null, "unit": "MPa|N/mm2|ksi|psi", "elongation_pct": number|null,
              "hardness": text|null, "impact_j": number|null, "item_line": number|null}]}
 If the item table gives the heat number per line, every item heat_no must also appear in heats.
@@ -97,7 +115,8 @@ legibility: "good|fair|poor".
 Return ONLY this JSON object:
 {"page_type": "...", "cert_no": null, "material_no": null, "cert_type": null, "date_as_written": null,
  "date_iso": null, "mill": null, "supplier": null, "customer": null, "order_numbers": [], "product": null,
- "standard": null, "grade": null, "items": [], "heats": [], "legibility": "good"}
+ "standard": null, "grade": null, "handwritten": {"orders": [], "job": null}, "size_unit": null, "items": [], "chem_columns": [], "heats": [],
+ "legibility": "good"}
 Copy numbers and codes exactly as printed. Use null when you cannot read a value - do not guess.'''
 
 CERT_TYPES = ("mtc", "mtc_continuation", "inspection_only")
@@ -194,6 +213,8 @@ def norm_nb(v):
             return int(x)
         return nb_from_od(x)
     s = str(v).upper().replace("”", '"').replace("''", '"').strip()
+    if re.match(r'\s*[\d /.-]+"\s+[X×*]\s+\d', s):          # 711: 2" x 1 1/2" - the size before the x
+        s = re.split(r"[X×*]", s)[0]
     m = re.search(r'(\d+)\s*[- ]\s*(\d)\s*/\s*(\d)\s*(?:"|IN|INCH)', s) or re.search(r'(?<![\d.])(\d)\s*/\s*(\d)\s*(?:"|IN|INCH)', s)
     if m:
         key = f"{m.group(1)} {m.group(2)}/{m.group(3)}" if len(m.groups()) == 3 else f"{m.group(1)}/{m.group(2)}"
@@ -207,6 +228,10 @@ def norm_nb(v):
     if m:
         n = _num(_digits_ocr(m.group(1) or m.group(2)))
         return int(n) if n in NB_LIST else None
+    m = re.search(r"\bN\.?\s*B\.?\s*(\d{1,4})\b", s)    # 694: "NB8" = 8 inch = 200NB (Sumitomo); NB20 = 20NB (Iraeta)
+    if m:
+        n = int(m.group(1))
+        return INCH_NB.get(str(n)) if n <= 18 and str(n) in INCH_NB else (n if n in NB_LIST else None)
     m = re.match(r"\s*(\d{2,4}(?:\.\d+)?)\s*(?:MM)?\s*(?:[X*×]|$)", s)        # '219.1*12.7*12.192' or '141.3'
     if m:
         x = float(m.group(1))
@@ -386,11 +411,15 @@ _PAPERS = [("bill_of_lading", r"BILL\s*OF\s*LADING|\bB/L\s*NO"), ("packing_list"
            ("invoice", r"COMMERCIAL\s*INVOICE|TAX\s*INVOICE"), ("letter_of_credit", r"LETTER\s*OF\s*CREDIT|DOCUMENTARY\s*CREDIT\s*NUMBER")]
 
 
+_TABLE = re.compile(r"(?i)HEAT\s*NO|YIELD|TENSILE|ELONGATION")
+
+
 def rule_page_type(text):
     """Page type from a text layer when it is plain (shipping papers with no cert wording), else None (ask the model)."""
     t = text or ""
-    if len(t.strip()) < 80 or _CERT.search(t):
-        return None
+    if len(t.strip()) < 80 or _CERT.search(t) or _TABLE.search(t):
+        return None                                     # 553: a chemistry / mechanicals page whose header says
+                                                        # "DOCUMENTARY CREDIT NUMBER" (DOC010818-001 p2) is not a L/C
     for kind, rx in _PAPERS:
         if re.search(rx, t, re.I):
             return kind
@@ -529,8 +558,8 @@ def best_turn(path, page):
     return (best if score[best] >= max(12, 1.5 * rest) else None), score
 
 
-def read_page(path, page, ollama_url, model, fewshot_dir, family=None, px=1600, hint=None, timeout=1200,
-              keep_alive="15m", num_ctx=49152, earlier_heats=None, extra="", turn=None):   # 49152 = the pipeline readers' value: no model reload
+def _read_page_once(path, page, ollama_url, model, fewshot_dir, family=None, px=1600, hint=None, timeout=1200,
+                   keep_alive="15m", num_ctx=49152, earlier_heats=None, extra="", turn=None, system=None):   # 49152 = the pipeline readers' value: no model reload
     with tempfile.TemporaryDirectory() as tmp:
         if str(path).lower().endswith(".pdf"):
             png = render(path, page, px, os.path.join(tmp, "p.png"))
@@ -551,7 +580,7 @@ def read_page(path, page, ollama_url, model, fewshot_dir, family=None, px=1600, 
         prompt += ("\n\n" + extra) if extra else ""
         body = {"model": model, "stream": False, "format": "json", "keep_alive": keep_alive,
                 "options": {"temperature": 0, "num_ctx": num_ctx, "num_predict": NUM_PREDICT},
-                "messages": [{"role": "system", "content": PROMPT}] + fewshot_msgs(fewshot_dir, family)
+                "messages": [{"role": "system", "content": system or PROMPT}] + fewshot_msgs(fewshot_dir, family)
                             + [{"role": "user", "content": prompt, "images": [base64.b64encode(open(png, "rb").read()).decode()]}]}
         req = urllib.request.Request(ollama_url.rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
@@ -561,6 +590,387 @@ def read_page(path, page, ollama_url, model, fewshot_dir, family=None, px=1600, 
     if turned and isinstance(a, dict):
         a["turned_upright"] = turned
     return a
+
+
+def _v2_bad(a):
+    """694: a cert page the headings + rows answer failed on: nothing read, heats left out, no heat with usable
+    chemistry, or carbon-steel values out of range."""
+    if not isinstance(a, dict) or a.get("page_type") not in CERT_TYPES:
+        return False
+    heats = [h for h in a.get("heats") or [] if isinstance(h, dict)]
+    if not heats:
+        return not a.get("items") or bool(a.get("chem_columns"))
+    chems = [chem_of(h, a) or {} for h in heats]
+    if not any(chems):
+        return True
+    mn = [c["Mn"] for c in chems if isinstance(c.get("Mn"), (int, float)) and not ((c.get("Cr") or 0) > 5 or (c.get("Ni") or 0) > 5)]
+    if mn and max(mn) < 0.1:                              # 727: F2000-2503 - C 0.0043 Mn 0.0044 on every row
+        return True
+    return any(isinstance(c.get(el), (int, float)) and c[el] > CHEM_MAX[el] for c in chems for el in _TIGHT
+               if not ((c.get("Cr") or 0) > 5 or (c.get("Ni") or 0) > 5))
+
+
+def _item_heat_hits(heats, items):
+    ik = {heat_key(i.get("heat_no")) for i in items if isinstance(i, dict) and i.get("heat_no")}
+    return sum(1 for h in heats if isinstance(h, dict) and heat_key(h.get("heat_no")) in ik)
+
+
+def _good_chem(heats, ans):
+    """710: distinct heats with chemistry and no carbon-steel value out of range (stainless not checked)."""
+    n = set()
+    for h in heats:
+        c = chem_of(h, ans) or {}
+        if c and not any(isinstance(c.get(el), (int, float)) and c[el] > CHEM_MAX[el] for el in _TIGHT
+                         if not ((c.get("Cr") or 0) > 5 or (c.get("Ni") or 0) > 5)):
+            n.add(heat_key(h.get("heat_no")))
+    return len(n)
+
+
+def _hybrid(b, a):
+    """710: the 10 Nov answer b with the headings + rows answer a's heats, chem_columns and handwritten numbers."""
+    items = [i for i in b.get("items") or [] if isinstance(i, dict)]
+    ha = [h for h in a.get("heats") or [] if isinstance(h, dict)]
+    hb = [h for h in b.get("heats") or [] if isinstance(h, dict)]
+    if _good_chem(hb, b) > _good_chem(ha, a):             # 00014296: the 10 Nov answer had chemistry on more heats
+        return None
+    if items and _item_heat_hits(ha, items) < _item_heat_hits(hb, items):
+        if len(ha) != len(hb):
+            return None
+        ha = [dict(h, heat_no=g.get("heat_no")) if g.get("heat_no") else h for h, g in zip(ha, hb)]
+    ia = [i for i in a.get("items") or [] if isinstance(i, dict)]
+    if len(ia) == len(items):                             # 'SGP ELBOW 90D LR' above its size rows: the product per row
+        items = [dict(i, product=j.get("product")) if not i.get("product") and j.get("product") and
+                 heat_key(i.get("heat_no")) == heat_key(j.get("heat_no")) else i for i, j in zip(items, ia)]
+    ha = _rows_from_v1(ha, a, hb)
+    return dict(b, items=items, heats=ha, chem_columns=a.get("chem_columns") or [], handwritten=a.get("handwritten") or b.get("handwritten"),
+                read_with="10 Nov prompt for header and items; headings + rows for heats and handwriting")
+
+
+def read_page(*args, **kw):
+    """710: a cert page read with both prompts (see _hybrid); 694: the 10 Nov answer whole where the headings + rows
+    answer fails (_v2_bad) or is cut off."""
+    try:
+        b = _read_page_once(*args, **dict(kw, system=PROMPT_V1))
+    except ValueError:                                    # json: the answer cut off or garbled
+        b = None
+    if isinstance(b, dict) and b.get("page_type") not in CERT_TYPES:
+        return b
+    try:
+        a = _read_page_once(*args, **kw)
+    except ValueError:
+        if b is None:
+            raise
+        a = None
+    if not isinstance(b, dict):
+        return a
+    if not isinstance(a, dict) or a.get("page_type") not in CERT_TYPES or _v2_bad(a):
+        if isinstance(a, dict) and a.get("handwritten") and not b.get("handwritten"):
+            b["handwritten"] = a["handwritten"]
+        b["read_with"] = "10 Nov prompt (the headings + rows answer " + ("was cut off)" if a is None else "had no usable chemistry)")
+        return b
+    m = _hybrid(b, a)
+    if m is None:
+        b["handwritten"] = a.get("handwritten") or b.get("handwritten")
+        b["read_with"] = "10 Nov prompt (the headings + rows heats did not match the items or had chemistry on fewer heats)"
+        return b
+    return m
+
+
+BNV_NOTES = """FORM NOTES - this is a BNV Piping Supplies / BNV Piping Products certificate. Its layout:
+ITEM TABLE, first column headed "Product & Size (Inch)". Each row reads left to right:
+  [underlined line number] [size in INCHES: 2, 1 1/2, 3/4, or a reducer 4X 3 / 2X 1 1/2 / 14 x 8]
+  [product: TEE, CON RED, ECC RED, CAP, 90 ELBOW LR, 45 ELBOW LR, 90 ELBOW SR - or, for a flange, its standard and
+  table such as SABS 1123 1000/3 or BS4504 16/3 followed by the face FF / RF and W/O] [schedule XS / STD / SCH 60, or SGP]
+  then the columns Heat ID, Quantity (blank on most certs, absent on older ones), Heat No. (on newer certs the same
+  3-digit number as Heat ID, such as 311 or 106; on older certs a longer number such as 54108 - always give the
+  Heat No. column), Raw Material Mfg. (C.H.MILL, H.X. MILL).
+Give each row as an item: "line" = the underlined line number, "size_text" = the inch size exactly as printed and
+nothing else ("2X 1 1/2", or 2.1/2" when it is printed with the inch mark), "product" = the product words ("CON RED", "90 ELBOW LR") or "Flange", "description" = the
+flange standard, table and face ("SABS 1123 1000/3 FF W/O") or null, "class" = the flange table ("1000/3") or null,
+"wt_text" = the schedule ("XS") or null, "qty" = the Quantity cell (null when blank - never the size or the line number),
+"heat_no" = the Heat No. The size_unit is "inch".
+CHEMISTRY TABLE below it: the columns C Si Mn P S Cu Ni Cr Mo Others CE, then MIN. and MAX. rows (the specification -
+never a result), then ONE result row per line number. Give one heats entry per result row: "item_line" = its line
+number, "heat_no" = the Heat No. of that line in the item table, "chem_row" = the row with null for every blank cell
+and for "####". Most rows have only C, Si, Mn, P, S. The tension test (yield, tensile, elongation, hardness HB) is
+on the same row.
+The certificate number is printed after "Certificate No." (BV-AG-...-n); "Job No" and "Indent Nos." are order numbers."""
+
+MINGPIN_NOTES = """FORM NOTES - this is a Hefei Mingpin Metals certificate. The item table (ITEM NO., SIZE in DN, PRODUCTS,
+QUANTITY, HEAT NO. ...) runs over several pages. The CHEMICAL COMPOSITION table is keyed by ITEM NO. and its "MATERIAL
+CHARGE NO." cells are blank: give one heats entry per result row with "item_line" = its ITEM NO. and "heat_no" null
+unless that item's row is on this page (then its HEAT NO.). The factors are printed under the headings (X100, X1000):
+copy them into chem_columns. MIN. / MAX. are the specification. YS and TS are headed KSI but are printed in MPa:
+give "unit": "MPa"."""
+
+FORMS = (
+    {"name": "BNV", "rows_per_line": True, "re": re.compile(r"\bB\s?N\s?V\b|\bBV-[A-Z]{2}-"), "inch": True, "no_qty": True, "items": "v2", "notes": BNV_NOTES},
+    {"name": "HEFEI MINGPIN", "rows_per_line": True, "re": re.compile(r"MINGPIN"), "inch": False, "no_qty": False, "items": None, "notes": MINGPIN_NOTES},
+)
+
+
+def _form_of(a):
+    """711: the known form a page answer names (mill, supplier or cert number), or None."""
+    if not isinstance(a, dict):
+        return None
+    hit = next((f for f in FORMS if f["name"] == a.get("form")), None)     # a sidecar's fields carry form "test_cert"
+    if hit:
+        return hit
+    t = " | ".join(str(a.get(k) or "") for k in ("mill", "supplier", "cert_no")).upper()
+    return next((f for f in FORMS if f["re"].search(t)), None)
+
+
+def read_page(*args, **kw):
+    """711 (replaces the 710 read_page above): a cert page read with both prompts; a known form's notes go with the
+    second reading, and for a form marked items "v2" its items are used; 694: the 10 Nov answer whole where the
+    headings + rows answer fails (_v2_bad) or is cut off."""
+    try:
+        b = _read_page_once(*args, **dict(kw, system=PROMPT_V1))
+    except ValueError:                                    # json: the answer cut off or garbled
+        b = None
+    if isinstance(b, dict) and b.get("page_type") not in CERT_TYPES:
+        return b
+    form = _form_of(b)
+    kw2 = dict(kw, extra=((kw.get("extra") or "") + "\n\n" + form["notes"]).strip()) if form else kw
+    try:
+        a = _read_page_once(*args, **kw2)
+    except ValueError:
+        if b is None:
+            raise
+        a = None
+    if not isinstance(b, dict):
+        return a
+    if form:
+        b["form"] = form["name"]
+    v2_items = bool(form and form["items"] == "v2" and isinstance(a, dict) and [i for i in a.get("items") or [] if isinstance(i, dict)]
+                    and _v2_items_ok(a, b))
+    if not isinstance(a, dict) or a.get("page_type") not in CERT_TYPES or _v2_bad(a):
+        if isinstance(a, dict) and a.get("handwritten") and not b.get("handwritten"):
+            b["handwritten"] = a["handwritten"]
+        b["read_with"] = "10 Nov prompt (the headings + rows answer " + ("was cut off)" if a is None else "had no usable chemistry)")
+        return b                                          # BNV p13: a reading that failed the chemistry dropped a row too
+    if v2_items:
+        items, heats = _full_heats(_fill_sizes(a["items"], b.get("items")), b.get("items"), a.get("heats") or [])
+        return _v1_flags(b, dict(b, items=items, heats=heats, chem_columns=a.get("chem_columns") or [],
+                                 handwritten=a.get("handwritten") or b.get("handwritten"), size_unit=a.get("size_unit"),
+                                 cert_no=a.get("cert_no") or b.get("cert_no"),
+                                 read_with=f"10 Nov prompt for the header; headings + rows with the {form['name']} form notes for items, heats and handwriting"))
+    m = _hybrid(b, a)
+    if m is None:
+        b["handwritten"] = a.get("handwritten") or b.get("handwritten")
+        b["read_with"] = "10 Nov prompt (the headings + rows heats did not match the items or had chemistry on fewer heats)"
+        return b
+    m["size_unit"] = a.get("size_unit")
+    return _v1_flags(b, m)
+
+
+def _rows_from_v1(ha, a, hb):
+    """727 (Panjin ZBS2024078066: 10 values under 12 headings, S 0.008 and one 0.002 left out): a headings + rows row
+    shorter than its headings pairs from the left, so every value after the first gap is one heading off. Where the
+    10 Nov reading of that heat has a value for every heading and the short row is those values with some left out,
+    the heat keeps the 10 Nov chemistry."""
+    byk = {heat_key(g.get("heat_no")): g for g in hb if g.get("heat_no")}
+    out = []
+    for n, h in enumerate(ha):
+        g = byk.get(heat_key(h.get("heat_no"))) or (hb[n] if len(hb) == len(ha) else None)
+        row = h.get("chem_row")
+        els = [el for el, _ in _chem_cols(h.get("chem_columns") or a.get("chem_columns")) if el]
+        if g and isinstance(row, list) and 5 <= len(row) < len(els) and isinstance(g.get("chem"), dict):
+            c1 = {_el(k): _num(v) for k, v in g["chem"].items()}
+            full = [c1.get(el) for el in els]
+            vals = [_num(v) for v in row]
+            it = iter(full)
+            if None not in full and None not in vals and all(any(abs(v - x) < 1e-9 for v in it) for x in vals):
+                h = dict({k: v for k, v in h.items() if k not in ("chem_row", "chem_columns")}, chem=g["chem"],
+                         chem_multiplier=g.get("chem_multiplier") or {})
+        out.append(h)
+    return out
+
+
+def _v1_flags(b, m):
+    """727: what the 10 Nov reading b of this page lacked, kept on the combined answer m: read() asks a page that
+    answered with its type only once more (445) and rescue() takes the upright reading whole (518) as they did before
+    the headings + rows reading added heats to such a page (a sideways page: its header is misread)."""
+    if not _has_content(b):
+        m["v1_empty"] = True
+    if not b.get("items") and not b.get("heats"):
+        m["v1_no_lines"] = True
+    return m
+
+
+def _heats_even(items):
+    """727: the lines whose heat number has the commonest length on the page."""
+    ls = [len(k) for k in (heat_key(i.get("heat_no")) for i in items if isinstance(i, dict)) if k]
+    return max(ls.count(n) for n in set(ls)) if ls else 0
+
+
+def _v2_items_ok(a, b):
+    """727 (BNV control BV-AG-J2WNG160701A: heats 119 / 183 / 160 / 173 among 54xxx ones, the rows one off): with the
+    same number of lines in both readings the form reading's lines are used only if their heat numbers are as even in
+    length as the 10 Nov reading's."""
+    ia = [i for i in a.get("items") or [] if isinstance(i, dict)]
+    ib = [i for i in b.get("items") or [] if isinstance(i, dict)]
+    return len(ia) != len(ib) or _heats_even(ia) >= _heats_even(ib)
+
+
+def _full_heats(items, other, heats):
+    """711: older BNV certs print a short Heat ID (108) beside the full Heat No. (54108): where the other reading's line
+    has a longer heat number ending in the form reading's, the longer one is the heat (items and chemistry rows)."""
+    other = [i for i in other or [] if isinstance(i, dict)]
+    byline = {int(_num(o.get("line"))): o for o in other if _num(o.get("line")) is not None}
+    ren = {}
+    for k, i in enumerate(items):
+        ln = _num(i.get("line"))
+        o = byline.get(int(ln)) if ln is not None else (other[k] if len(other) == len(items) else None)
+        h, ho = heat_key(i.get("heat_no")), heat_key((o or {}).get("heat_no"))
+        if h and ho and len(ho) > len(h) and ho.endswith(h):
+            ren[h] = o["heat_no"]
+            i["heat_no"] = o["heat_no"]
+    heats = [dict(h, heat_no=ren[heat_key(h.get("heat_no"))]) if isinstance(h, dict) and heat_key(h.get("heat_no")) in ren else h
+             for h in heats]
+    return items, heats
+
+
+def _fill_sizes(items, other):
+    """711: form-reading item lines with no size (BNV p8 / p12: the model left the size out on flange pages) take the
+    other reading's size of the same line - its size text, or the quantity when the size went there."""
+    items = [dict(i) for i in items if isinstance(i, dict)]
+    other = [i for i in other or [] if isinstance(i, dict)]
+    byline = {int(_num(o.get("line"))): o for o in other if _num(o.get("line")) is not None}
+    qs = [_num(o.get("qty")) for o in other]
+    qty_is_size = len(other) > 2 and len(set(qs)) > len(other) // 2       # BNV p8: qty 1 on every line is no size
+    for k, i in enumerate(items):
+        if str(i.get("size_text") or "").strip() and not _FLANGE_STD.fullmatch(str(i.get("size_text")).strip()) \
+                and not re.fullmatch(r"\s*\d{3,4}\s*/\s*\d\s*", str(i.get("size_text"))):
+            continue
+        ln = _num(i.get("line"))
+        o = byline.get(int(ln)) if ln is not None else None
+        if o is None and len(other) == len(items):
+            o = other[k]
+        if not o:
+            continue
+        st = str(o.get("size_text") or "").strip()
+        q = _num(o.get("qty"))
+        if _BARE_SIZE.fullmatch(st) and _inch_key(_BARE_SIZE.fullmatch(st).group(1)) in INCH_NB:
+            i["size_text"] = st
+        elif qty_is_size and q is not None and float(q).is_integer() and str(int(q)) in INCH_NB:
+            i["size_text"] = str(int(q))
+    return items
+
+
+_BARE_IN = r"(\d{1,2}\s+\d\s*/\s*\d|\d\s*/\s*\d|\d{1,2})"
+_BARE_SIZE = re.compile(rf"\s*{_BARE_IN}\s*(?:[Xx×*]\s*{_BARE_IN})?\s*")
+_FLANGE_STD = re.compile(r"(SA[BN]S\s*1123|BS\s*4504|BS\s*10\b|B\s*16\.5)\s*(?:T(?:ABLE)?\s*)?([0-9]{1,4}\s*/\s*\d|[D-H]\b)?", re.I)
+
+
+def _inch_key(s):
+    return re.sub(r"\s*/\s*", "/", re.sub(r"\s+", " ", str(s).strip()))
+
+
+def _form_rules(a):
+    """711: a page answer with its form's rules applied: bare sizes in inches, BNV's blank quantity, flange lines."""
+    if not isinstance(a, dict):
+        return a
+    form = _form_of(a)
+    items = [dict(i) for i in a.get("items") or [] if isinstance(i, dict)]
+    if not items:
+        return a
+    bnv = bool(form and form["name"] == "BNV")
+    if form and form["no_qty"]:
+        qs = [_num(i.get("qty")) for i in items]
+        same = len(items) > 1 and len({q for q in qs}) == 1
+        for i, q in zip(items, qs):
+            if q is None:
+                continue
+            asize = str(int(q)) if float(q).is_integer() else None
+            bare = _BARE_SIZE.fullmatch(str(i.get("size_text") or ""))
+            if not bare and asize in INCH_NB and not norm_nb(i.get("size_text")):
+                i["description"] = i.get("description") or i.get("size_text")     # the size was read into the quantity
+                i["size_text"], i["qty"] = asize, None
+            elif same or (bare and _inch_key(bare.group(1)) == asize):
+                i["qty"] = None
+    inch = bool(form and form["inch"])
+    if not inch and str(a.get("size_unit") or "").lower().startswith("in"):
+        bare = [_BARE_SIZE.fullmatch(str(i.get("size_text") or "")) for i in items]
+        keys = [_inch_key(g) for m in bare if m for g in m.groups() if g]
+        inch = bool(keys) and all(k in INCH_NB for k in keys) and any(not k.isdigit() or int(k) not in NB_LIST for k in keys)
+    for i in items:
+        t = " ".join(str(i.get(k) or "") for k in ("product", "description", "size_text"))
+        m = _FLANGE_STD.search(t)
+        if bnv and m:                                     # SABS 1123 1000/3 FF W/O: a flange, its table the class
+            if not family_of_product(i.get("product"), None) == "Flanges":
+                i["description"] = i.get("description") or i.get("product")
+                i["product"] = "Flange"
+            if m.group(2) and not i.get("class"):
+                i["class"] = re.sub(r"\s", "", m.group(2)) if "/" in m.group(2) else f"Table {m.group(2).upper()}"
+        if not inch:
+            continue
+        m = _BARE_SIZE.fullmatch(str(i.get("size_text") or ""))
+        if not m or _inch_key(m.group(1)) not in INCH_NB:
+            continue
+        a1, a2 = _inch_key(m.group(1)), (_inch_key(m.group(2)) if m.group(2) else None)
+        if a2 and a2 not in INCH_NB:
+            continue
+        i["size_text"] = f'{a1}"' + (f' x {a2}"' if a2 else "")
+        if a2 and not i.get("size2_text"):
+            i["size2_text"] = f'{a2}"'
+    return dict(a, items=items)
+
+
+def _vote_rows(a):
+    """711: a form with one chemistry row per item line (BNV, Hefei Mingpin): the rows of one heat are one chemistry -
+    each element takes the value most of that heat's rows give (the first on a tie)."""
+    form = _form_of(a)
+    heats = [h for h in a.get("heats") or [] if isinstance(h, dict)]
+    if not form or not form.get("rows_per_line") or len(heats) < 2:
+        return a
+    groups, order = {}, []
+    for h in heats:
+        k = heat_key(h.get("heat_no"))
+        if k not in groups:
+            order.append(k)
+        groups.setdefault(k, []).append(h)
+    if all(len(g) == 1 for g in groups.values()):
+        return a
+    out = []
+    for k in order:
+        g = groups[k]
+        chems = [chem_of(h, a) or {} for h in g]
+        voted = {}
+        for el in [e for c in chems for e in c]:
+            if el in voted:
+                continue
+            vals = [c[el] for c in chems if c.get(el) is not None]
+            if len(vals) * 2 >= len(g) or len(g) == 1:    # an element on under half the rows is a stray cell
+                voted[el] = max(vals, key=lambda v: (vals.count(v), -vals.index(v)))
+        first = {x: v for x, v in g[0].items() if x not in ("chem_row", "chem_columns", "chem_multiplier")}
+        out.append(dict(first, chem=voted, mech=[m for h in g for m in (h.get("mech") or []) if isinstance(m, dict)] or g[0].get("mech") or []))
+    return dict(a, heats=out)
+
+
+def _link_cert(cert_pages):
+    """711: chemistry rows keyed by item number whose item rows are on another page of the cert (Hefei Mingpin: items
+    1 - 45 on page 1, their chemistry on page 4) take that item's heat number."""
+    byline = {}
+    for p in cert_pages:
+        for i in (p["answer"] or {}).get("items") or []:
+            ln = _num(i.get("line")) if isinstance(i, dict) else None
+            if ln is not None and i.get("heat_no"):
+                byline.setdefault(int(ln), i["heat_no"])
+    if not byline:
+        return cert_pages
+    known = {heat_key(v) for v in byline.values()}
+    out = []
+    for p in cert_pages:
+        a = p["answer"] or {}
+        heats = []
+        for h in a.get("heats") or []:
+            ln = _num(h.get("item_line")) if isinstance(h, dict) else None
+            if ln is not None and int(ln) in byline and (not h.get("heat_no") or heat_key(h.get("heat_no")) not in known):
+                h = dict(h, heat_no=byline[int(ln)], charge_no=h.get("heat_no") or None)
+            heats.append(h)
+        out.append(dict(p, answer=dict(a, heats=heats)))
+    return out
 
 
 REREAD_EMPTY = ('Your answer for this page was empty, but it is a certificate (a page with a chemical composition table '
@@ -612,7 +1022,7 @@ def rescue(path, pages, ollama_url, model, family=None, timeout=1200, keep_alive
                            extra=RESCUE_ASK, turn=deg)
             way = "osd" if deg is None else deg
             if isinstance(a2, dict) and a2.get("page_type") in CERT_TYPES:
-                if a.get("page_type") in CERT_TYPES and (a.get("items") or a.get("heats")):
+                if a.get("page_type") in CERT_TYPES and (a.get("items") or a.get("heats")) and not a.get("v1_no_lines"):
                     # 528: the first reading had items or heats: keep it, take only what it lacked (518's test: a
                     # whole second reading found the heats but changed a right pipe size)
                     a2 = dict(a, items=a.get("items") or a2.get("items") or [], heats=a.get("heats") or a2.get("heats") or [])
@@ -665,12 +1075,12 @@ def read(path, ollama_url, model="qwen2.5vl:7b", fewshot_dir=None, family=None, 
                 first = str(e)[:200]                # once more without worked examples, at the normal size
                 a = read_page(path, p, ollama_url, model, "", family, px, hint, timeout, keep_alive, earlier_heats=earlier)
                 how += f"+retry ({first})"
-            if (a or {}).get("page_type") in CERT_TYPES and not _has_content(a):
+            if (a or {}).get("page_type") in CERT_TYPES and (not _has_content(a) or a.get("v1_empty")):
                 # 445: a certificate page answered with its type only (DOC280117-007): asked once more
                 try:
                     a2 = read_page(path, p, ollama_url, model, "", family, px, hint, timeout, keep_alive,
                                    earlier_heats=earlier, extra=REREAD_EMPTY)
-                    if _has_content(a2):
+                    if _has_content(a2) and not a2.get("v1_empty"):
                         a, how = a2, how + "+reread (empty answer)"
                 except Exception:
                     pass
@@ -687,7 +1097,7 @@ def read(path, ollama_url, model="qwen2.5vl:7b", fewshot_dir=None, family=None, 
 
 # ------------------------------------------------------------------------------------------------ answer -> fields
 _FAM_FLG = re.compile(r"FLANGE|\bPLFF\b|\bSORF\b|\bWNRF\b|\bBLRF\b|BLIND|\bW/N\b|\bWN\b|\bS/O\b|WELD\s*NECK|SLIP\s*ON|"
-                      r"\bFLP\b|\b(?:WO|BLO|SO|WN|BL)FF\b|SANS\s*1123|BS\s*4504|EN\s*1092|STEEL\s*RINGS?\b")
+                      r"\bFLP\b|\b(?:WO|BLO|SO|WN|BL)FF\b|SANS\s*1123|BS\s*4504|EN\s*1092|STEEL\s*RINGS?\b|\bCOLLARS?\b|\bFFWD\b|\bFFBLD\b|\bBS\s*10\b")
 _FAM_FIT = re.compile(r"ELBOW|BEND|\bTEES?\b|REDUCER|\bCAP\b|STUB|FITTING|\bLR\b|\bSR\b|90\s*DEG|45\s*DEG|\bELB(?:LR|SR)?\b|"
                       r"\b(?:CON|ECC)\.?\s*RED\b|\bRED\.?\s*(?:CON|ECC)\b|\bREDUC(?:ING|TION)\b|COUPLING|OLET\b|NIPPLE")
 _FAM_PIPE = re.compile(r"PIPE|TUBE|SMLS|SEAMLESS|ERW|LSAW")
@@ -755,10 +1165,20 @@ CHEM_MAX = {"C": 0.6, "Si": 1.5, "Mn": 2.5, "P": 0.1, "S": 0.1, "Cu": 1.0, "Ni":
             "Nb": 0.2, "Ti": 0.5, "Al": 0.2, "N": 0.05, "B": 0.01, "Ceq": 1.0}
 
 
+_EL_NAMES = {"CARBON": "C", "SILICON": "Si", "MANGANESE": "Mn", "PHOSPHORUS": "P", "PHOSPHOROUS": "P", "SULFUR": "S", "SULPHUR": "S",
+             "CHROMIUM": "Cr", "NICKEL": "Ni", "MOLYBDENUM": "Mo", "COPPER": "Cu", "VANADIUM": "V", "NIOBIUM": "Nb", "COLUMBIUM": "Nb",
+             "TITANIUM": "Ti", "ALUMINIUM": "Al", "ALUMINUM": "Al", "NITROGEN": "N", "BORON": "B"}
+
+
 def _el(k):
     k = re.sub(r"[^A-Za-z]", "", str(k))
     if k.upper() in ("CE", "CEQ", "CEV", "CEIIW"):
         return "Ceq"
+    if len(k) > 4:                                        # 727: Jinan Rich 19066-2 - CARBON, SILICON, PHOSPHORU
+        import difflib
+        hit = difflib.get_close_matches(k.upper(), list(_EL_NAMES), n=3, cutoff=0.85)
+        if hit and len({_EL_NAMES[x] for x in hit}) == 1:
+            return _EL_NAMES[hit[0]]
     return k.capitalize() if len(k) <= 2 else k
 
 
@@ -780,16 +1200,174 @@ def _chem(h):
     return out
 
 
+_TIGHT = ("C", "Si", "Mn", "P", "S")
+_SUMI = re.compile(r"SUMITOMO|SUMIKIN")                  # 701
+_SUMI_F = {"P": 1000, "S": 1000, "Nb": 1000, "B": 10000}
+
+
+def _sumitomo_heats(a):
+    """701: Sumitomo heat numbers are J and a digit (J0K4024, J0LB700): an O read for that 0 is the 0."""
+    if not isinstance(a, dict) or not _SUMI.search(str(a.get("mill") or "").upper()):
+        return a
+    fix = lambda v: re.sub(r"^JO(?=[A-Z0-9])", "J0", str(v).strip().upper()) if v else v
+    return dict(a, heats=[dict(h, heat_no=fix(h.get("heat_no"))) if isinstance(h, dict) else h for h in a.get("heats") or []],
+                items=[dict(i, heat_no=fix(i.get("heat_no"))) if isinstance(i, dict) else i for i in a.get("items") or []])
+
+
+def _chem_cols(v):
+    """553: chem_columns -> [(element, factor)]; an entry may be a plain heading ("Mn", "P x1000")."""
+    out = []
+    for c in v if isinstance(v, list) else []:
+        el, f = (c.get("el") or c.get("element"), c.get("factor")) if isinstance(c, dict) else (c, None)
+        el = str(el or "")
+        if f is None:
+            m0 = re.search(r"[x×*]\s*(10+)\b|10\s*-\s*([234])", el, re.I)
+            f = (m0.group(1) or 10 ** int(m0.group(2))) if m0 else None
+            el = re.split(r"[x×*(]|10\s*-", el, flags=re.I)[0] if m0 else el
+        m = re.search(r"\d+", str(f or ""))
+        k = _el(el) if re.search(r"[A-Za-z]", el) and not ("+" in el or re.fullmatch(r"\*?\s*[UV]\d", el.strip())) else None
+        n = int(m.group()) if m else 0
+        out.append((k, 10 ** n if 2 <= n <= 6 else n if n >= 10 else None))  # a factor code under the heading: 2 = x100, 3 = x1000; 1 = none (694)
+    return out
+
+
+_FILL_MAX = {"Nb": 0.25, "Ti": 0.25, "V": 0.25, "Al": 0.3, "N": 0.05, "B": 0.02}
+_RESID = ("Cr", "Ni", "Mo", "Cu", "V", "Nb", "Ti", "Al", "N", "B", "Ceq", "CE", "Others")
+
+
+def _drop_fill(c, a=None):
+    """711: values the model made up for blank cells: one value on 3 or more residual elements where it is impossible
+    for one of them (Nb 0.45), and on a BNV page the MAX. row (Cu = Ni = Cr) read into the result."""
+    if not isinstance(c, dict) or not c:
+        return c
+    c = {k: v for k, v in c.items() if k != "Others"}
+    if any(isinstance(c.get(el), (int, float)) and c[el] > CHEM_MAX[el] for el in _TIGHT):
+        return c                                          # a row still in printed whole numbers: a factor question, not a fill
+    by = {}
+    for el in _RESID:
+        if isinstance(c.get(el), (int, float)) and 0 < c[el] < 1:
+            by.setdefault(c[el], []).append(el)
+    for v, els in by.items():
+        if len(els) >= 3 and any(v > _FILL_MAX[el] for el in els if el in _FILL_MAX):
+            c = {k: x for k, x in c.items() if k not in els}
+    form = _form_of(a) if a else None
+    if form and form["name"] == "BNV" and c.get("Cu") is not None and c.get("Cu") == c.get("Ni") and c["Cu"] >= 0.3:   # MAX. Cu 0.4 Ni 0.4
+        c = {k: x for k, x in c.items() if k not in _RESID}
+    if form and form["name"] == "BNV" and not any(c.get(el) is not None for el in ("Cu", "Ni", "Cr", "Mo")):
+        c = {k: x for k, x in c.items() if k not in ("Ceq", "CE")}
+    return c
+
+
+def chem_of(h, a=None):
+    return _drop_fill(_chem_of711(h, a), a)
+
+
+def _chem_of711(h, a=None):
+    """553: a heat's chemistry in %: its chem_row paired with the page's (or its own) chem_columns; else the old
+    "chem" dict. None when the row and the headings differ in count and there is no dict."""
+    cols = _chem_cols(h.get("chem_columns") or (a or {}).get("chem_columns"))
+    row = h.get("chem_row")
+    if cols and isinstance(row, list):
+        if len(row) > len(cols) or len(row) < min(5, len(cols)):
+            return _chem(h) if h.get("chem") else None    # 694: a shorter row (blank cells at the end) pairs from the left
+        raw = [(el, _num(v), f) for (el, f), v in zip(cols, row) if el]
+        raw = [(el, x, f) for el, x, f in raw if x is not None]
+        if _SUMI.search(str((a or {}).get("mill") or "").upper()) and raw and all(float(x).is_integer() for _, x, _ in raw):
+            raw = [(el, x, _SUMI_F.get(el, 100)) for el, x, f in raw]    # 701: the mill's legend, whatever was read
+        unf = [(el, x) for el, x, f in raw if not f and el in _TIGHT and x > CHEM_MAX[el] and x >= 1 and float(x).is_integer()]
+        if unf and all(x / 100 <= CHEM_MAX[el] for el, x in unf):    # 694: C 19 under no factor - the "OTHER: X100" columns
+            raw = [(el, x, f or 100) for el, x, f in raw]
+        whole = any(f and el in _TIGHT and x > CHEM_MAX[el] for el, x, f in raw)
+        out = {}
+        for el, x, f in raw:
+            mx = CHEM_MAX.get(el)
+            if f and (whole or (mx and x > mx and x / f <= mx)):
+                x = round(x / f, 6)
+            out.setdefault(el, x)
+        return out
+    return _chem(h)
+
+
 def _mpa(v, unit):
     x = _num(v)
     if x is None:
         return None
     u = (unit or "MPa").upper()
     if "KSI" in u:
-        return round(x * 6.894757)
+        return round(x * 6.894757) if x <= 200 else x     # 711: 325 "KSI" is MPa as printed
     if "PSI" in u:
         return round(x * 0.006894757)
     return x
+
+
+_PEN = str.maketrans({"C": "0", "O": "0", "Q": "0", "D": "0", "U": "0", "Z": "2", "I": "1", "L": "1", "T": "7", "S": "5", "B": "8", "G": "6"})
+
+
+def _hand_order(v):
+    """641: a handwritten order number, pen letters read as digits fixed (as tc_copies): "DFZ866" -> "DF2866"."""
+    s = re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
+    m = re.fullmatch(r"[DUO]?F(\w{4,5})", s)
+    if m and re.fullmatch(r"\d{4,5}", m.group(1).translate(_PEN)):
+        return "DF" + m.group(1).translate(_PEN)
+    m = re.fullmatch(r"A(\w{5})", s)
+    if m and re.fullmatch(r"\d{5}", m.group(1).translate(_PEN)):
+        return "A" + m.group(1).translate(_PEN)
+    return str(v or "").strip()
+
+
+def _link_items(a):
+    """642: chemistry rows keyed by item number (Shanghai Gateway) -> rows under the item lines' heat numbers."""
+    items = [i for i in a.get("items") or [] if isinstance(i, dict)]
+    heats = [h for h in a.get("heats") or [] if isinstance(h, dict)]
+    ih = {heat_key(i.get("heat_no")) for i in items if i.get("heat_no")}
+    if not items or not heats or not ih or any(heat_key(h.get("heat_no")) in ih for h in heats):
+        return a
+    byline = {}
+    for i in items:
+        ln = _num(i.get("line"))
+        if ln is not None and i.get("heat_no"):
+            byline.setdefault(int(ln), i["heat_no"])
+    pairs = [byline.get(int(_num(h.get("item_line")))) if _num(h.get("item_line")) is not None else None for h in heats]
+    if not all(pairs):                                    # the charge carries the item heat: "16CT12181/16BS712", "7102352163" for 163
+        iks = [(heat_key(i.get("heat_no")), i["heat_no"]) for i in items if i.get("heat_no")]
+        def match(hn):
+            k, first = heat_key(hn), heat_key(str(hn).split("/")[0])
+            return next((v for ik, v in iks if ik == first), None) or                 next((v for ik, v in sorted(iks, key=lambda x: -len(x[0])) if len(ik) >= 3 and k.endswith(ik)), None)
+        spec = lambda hn: re.search(r"ASTM|ASME|SPEC|MIN|MAX|\bEN\s?10", str(hn or "").upper())
+        got = [match(h.get("heat_no")) for h in heats]
+        if any(got) and all(g or spec(h.get("heat_no")) for g, h in zip(got, heats)):
+            pairs = [g or h.get("heat_no") for g, h in zip(got, heats)]   # a spec row read as a heat stays as it was
+        else:
+            pairs = got
+    if not all(pairs):                                    # rows in item order (Gateway, Double-Peace, Longgang forms)
+        mill = str(a.get("mill") or "").upper()
+        known = any(m in mill for m in ("GATEWAY", "PEACE", "LONGGANG"))
+        rownos = all(re.fullmatch(r"\d{1,3}", str(h.get("heat_no") or "").strip()) for h in heats)
+        if not ((known or rownos) and len(heats) == len(items)):
+            return a
+        pairs = [i.get("heat_no") for i in items]
+    return dict(a, heats=[dict(h, heat_no=hn, charge_no=h.get("heat_no")) if hn != h.get("heat_no") else h for h, hn in zip(heats, pairs)])
+
+
+def _drop_repeats(cert_pages):
+    """641: a page whose cert number, item lines and heats repeat an earlier page's is another scan of the same paper."""
+    seen, loose, keep, repeats = set(), [], [], []
+    for p in cert_pages:
+        a = p["answer"] or {}
+        its = tuple(sorted((heat_key(i.get("heat_no")), str(i.get("qty")), str(i.get("size_text"))) for i in a.get("items") or [] if isinstance(i, dict)))
+        hs = tuple(sorted(heat_key(h.get("heat_no")) for h in a.get("heats") or [] if isinstance(h, dict)))
+        sig = (_HKEY(a.get("cert_no")), its, hs)
+        ck = _HKEY(a.get("cert_no"))
+        lit = tuple(sorted((heat_key(i.get("heat_no")), str(_num(i.get("qty")))) for i in a.get("items") or [] if isinstance(i, dict) and i.get("heat_no")))
+        if ((its or hs) and sig in seen) or (lit and hs and any(lit == l2 and hs == h2 and (ck == c2 or _one_off(ck, c2))
+                                                                 for c2, l2, h2 in loose)):   # 694: other size spacing, a letter off
+            repeats.append(p)
+            keep.append(dict(p, answer=dict(a, items=[], heats=[dict(h, mech=[]) for h in a.get("heats") or [] if isinstance(h, dict)])))
+        else:                                             # 694: a copy still fills in elements the first scan missed
+            seen.add(sig)
+            loose.append((ck, lit, hs))
+            keep.append(p)
+    return keep, repeats
 
 
 def merge(pages, source_name="", family_hint=None):
@@ -806,12 +1384,17 @@ def merge(pages, source_name="", family_hint=None):
         m = re.search(r"(?<![A-Z0-9])A\s?-?\s?\d{5}(?!\d)", job.upper())
         if m and not order:                               # "JOB 4122 A49797" read as one: the A-number is the order
             order, job = m.group(0), (job[:m.start()] + job[m.end():]).strip()
-        if order:
-            o = {"label": "handwritten", "value": order}
-            if o not in d["order_numbers"]:
-                d["order_numbers"].append(o)
+        for v in [order] + [str(x) for x in (hw.get("orders") if isinstance(hw.get("orders"), list) else [])]:     # 641
+            for tok in re.split(r"[;,/\s]+(?=[A-Za-z])", v.strip()):
+                o = {"label": "handwritten", "value": _hand_order(tok)}
+                if tok and o not in d["order_numbers"]:
+                    d["order_numbers"].append(o)
         if job and not d.get("mps_job"):
             d["mps_job"] = job
+    cert_pages, repeats = _drop_repeats(cert_pages)       # 641: the same paper scanned again
+    cert_pages = _link_cert([dict(p, answer=_form_rules(p["answer"] or {})) for p in cert_pages])   # 711: forms, item no. across pages
+    cert_pages = [dict(p, answer=_vote_rows(_sumitomo_heats(_link_items(p["answer"] or {})))) for p in cert_pages]   # 642: chemistry by item no.
+    extra = extra + repeats
     for k in ("cert_type", "date_iso", "date_as_written", "mill", "supplier", "customer", "product", "standard", "grade"):
         d[k] = None
     for p in cert_pages:
@@ -823,6 +1406,8 @@ def merge(pages, source_name="", family_hint=None):
             v = _clean(a.get(k))
             if v and re.fullmatch(r"(?i)(?:cert(?:ificate)?\.?\s*)?(?:no|n[o°º]|number|nr)\.?", v):
                 v = None                                            # the label read as the value ("No.")
+            if v and k == "cert_no" and re.search(r"10204|10474", v):
+                v = None                                            # 641: the inspection standard in the No. box
             if v and v not in d[dst]:
                 d[dst].append(v)
         for o in a.get("order_numbers") or []:
@@ -837,8 +1422,14 @@ def merge(pages, source_name="", family_hint=None):
                 continue
             key = norm_heat(h["heat_no"])
             cur = d["heats"].setdefault(key, {"heat_no": key, "grade": None, "chem": {}, "mech": [], "pages": []})
+            if h.get("charge_no") and not cur.get("charge_no"):
+                cur["charge_no"] = norm_heat(h["charge_no"])      # 642: the material charge the chemistry is of
             cur["grade"] = cur["grade"] or _clean(h.get("grade"))
-            for ek, ev in _chem(h).items():
+            ch = chem_of(h, a)                            # 553: headings + row, paired here
+            if ch is None:
+                d.setdefault("chem_mismatch", []).append(key)
+                ch = {}
+            for ek, ev in ch.items():
                 cur["chem"].setdefault(ek, ev)
             for m in h.get("mech") or []:
                 if isinstance(m, dict):
@@ -848,6 +1439,11 @@ def merge(pages, source_name="", family_hint=None):
             cur["pages"].append(p["page"])
         if a.get("legibility"):
             d["legibility"].append(a["legibility"])
+    for cur in d["heats"].values():                       # 641: yield and tensile printed the other way round
+        for m in cur["mech"]:
+            if m["yield_mpa"] and m["tensile_mpa"] and m["yield_mpa"] >= 1.15 * m["tensile_mpa"]:
+                m["yield_mpa"], m["tensile_mpa"] = m["tensile_mpa"], m["yield_mpa"]
+                d.setdefault("mech_swapped", []).append(cur["heat_no"])
     for p in extra:
         d["extra"].append((p["page"], (p["answer"] or {}).get("page_type") or "other"))
     return d
@@ -872,7 +1468,10 @@ def to_fields(d, source_name="", family_hint=None):
     """Merged answer -> pipeline fields (design §6) + flags. family_hint: the old library's family (backfill)."""
     chk, flags = [], []
     f = {"form": "test_cert", "doc_label": "Test certificate"}
-    f["cert_no"] = "; ".join(d["cert_nos"]) or None
+    cns = list({_HKEY(c): c for c in sorted(d["cert_nos"], key=lambda c: -str(c).count(" "))}.values())   # BY YF1577 = BYYF1577
+    cns = [c for i, c in enumerate(cns) if not any(_one_off(_HKEY(o), _HKEY(c)) and (len(_HKEY(o)) > len(_HKEY(c)) or
+                                                      (len(_HKEY(o)) == len(_HKEY(c)) and j < i)) for j, o in enumerate(cns))]
+    f["cert_no"] = "; ".join(cns) or None                # 694: BYF8794 on a copy of BYYF8794 - the full number
     f["material_no"] = "; ".join(d["material_nos"]) or None
     ct = str(d.get("cert_type") or "").upper()
     f["cert_type"] = ("3.2" if "3.2" in ct else "3.1" if "3.1" in ct else "2.2" if "2.2" in ct else
@@ -948,6 +1547,10 @@ def to_fields(d, source_name="", family_hint=None):
 
     # validation (design §3): flags, never fixes
     heat_keys = {heat_key(h["heat_no"]) for h in heats}
+    for hn in dict.fromkeys(d.get("mech_swapped") or []):
+        chk.append(f"heat {hn}: yield and tensile columns read the other way round - swapped")      # 641
+    for hn in dict.fromkeys(d.get("chem_mismatch") or []):
+        chk.append(f"heat {hn}: chemistry row and column headings differ in count - chemistry not read")    # 553
     for i in items:
         if i["heat_no"] and heats and heat_key(i["heat_no"]) not in heat_keys:
             chk.append(f"item {i['#']} heat {i['heat_no']} has no chemistry on the cert")
@@ -1161,12 +1764,25 @@ def _cert_key(v):
     return _HKEY(s).translate(_ILO)
 
 
+def _one_off(x, y):
+    """694: one number is the other with one character dropped, or (701) one letter read as another (BYVF8793 /
+    BYYF8793); a digit apart is a neighbouring cert, not a copy."""
+    if x and y and len(x) == len(y):
+        d = [(a, b) for a, b in zip(x, y) if a != b]
+        return len(d) == 1 and d[0][0].isalpha() and d[0][1].isalpha()
+    if abs(len(x) - len(y)) != 1:
+        return False
+    a, b = (x, y) if len(x) > len(y) else (y, x)
+    return any(a[:i] + a[i + 1:] == b for i in range(len(a)))
+
+
 def split_certs(pages):
     """500 (Dino 5 Nov): a scanned batch -> [[page numbers] per test certificate number], in the order the numbers first
     appear. A cert page with a number starts that cert's group or joins it again; a page without one stays with the
     page before it; pages before the first numbered page go with the first cert. Numbers must match exactly once
     normalised (I/L/O read as 1/1/0): neighbouring certs are often numbered one apart."""
     groups, order, cur, lead, numbered, mills, anon = {}, [], None, [], 0, {}, 0
+    gheats = {}                                           # 694: heats seen per cert, for copies with a misread number
     for p in pages:
         if not p.get("page"):
             continue
@@ -1176,6 +1792,9 @@ def split_certs(pages):
         if k and k in {_HKEY(o.get("value") if isinstance(o, dict) else o).translate(_ILO) for o in a.get("order_numbers") or []}:
             k = None                                      # 506: the page's order number read into the cert number box
         numbered += bool(k)
+        if k and k not in groups:                         # 694: BYF8793 on a copy of BYYF8793 (same heats)
+            ph = {heat_key(x) for x in _page_heats(a)}
+            k = next((g for g in order if ph and ph & gheats.get(g, set()) and _one_off(g, k)), k)
         mk = _mill_key(a.get("mill")) if cert else None
         if k:
             if k not in groups:
@@ -1196,6 +1815,8 @@ def split_certs(pages):
         if cur and mk and cur not in mills:
             mills[cur] = mk
         (groups[cur] if cur else lead).append(p["page"])
+        if cur and cert:
+            gheats.setdefault(cur, set()).update(heat_key(x) for x in _page_heats(a))
     if not numbered or 2 * numbered < sum(1 for p in pages if _header_page(p)):
         return _split_by_header(pages)                    # 506: no numbers, or too few to group by
     if len(order) == 1:
@@ -1254,3 +1875,7 @@ def _split_by_header(pages):
             out.append([])
         out[-1].append(p["page"])
     return out
+
+
+# 694: the 10 Nov prompt ({element: value} chemistry), for cert pages the headings + rows answer fails on
+PROMPT_V1 = __import__("base64").b64decode("WW91IGFyZSByZWFkaW5nIE9ORSBQQUdFIG9mIGEgZmlsZSBvZiBzdGVlbCB0ZXN0IGNlcnRpZmljYXRlcyBib3VnaHQgYnkgTWluaW5nIFByZXNzdXJlIFN5c3RlbXMgKE1QUykgb3IKUm9uaW4sIFNvdXRoIEFmcmljYTogcGlwZSwgZmxhbmdlcyBhbmQgcGlwZSBmaXR0aW5ncyAoZWxib3dzL2JlbmRzLCB0ZWVzLCByZWR1Y2VycywgY2Fwcywgc3R1YiBlbmRzKS4KCkZpcnN0IGRlY2lkZSB3aGF0IHRoZSBwYWdlIGlzIChwYWdlX3R5cGUpOgotICJtdGMiOiBhIG1pbGwgdGVzdCBjZXJ0aWZpY2F0ZSAvIG1hdGVyaWFsIHRlc3QgY2VydGlmaWNhdGUgLyBpbnNwZWN0aW9uIGNlcnRpZmljYXRlIHRvIEVOIDEwMjA0ICgzLjEsIDMuMiwgMi4yKQogIG9yIElTTyAxMDQ3NCB3aXRoIGEgY2hlbWljYWwgY29tcG9zaXRpb24gdGFibGUgKGFuZCB1c3VhbGx5IG1lY2hhbmljYWwgcHJvcGVydGllcykgZm9yIG9uZSBvciBtb3JlIGhlYXRzLgotICJtdGNfY29udGludWF0aW9uIjogdGhlIG5leHQgcGFnZSBvZiBhIGNlcnRpZmljYXRlIChtb3JlIGl0ZW1zLCBtb3JlIGhlYXRzIG9yIHRoZSBtZWNoYW5pY2Fscykgd2l0aG91dCBpdHMgb3duIGhlYWRlci4KLSAiaW5zcGVjdGlvbl9vbmx5IjogYW4gaW5zcGVjdGlvbiAvIGNvbmZvcm1pdHkgLyBxdWFsaXR5IGNlcnRpZmljYXRlIHdpdGggTk8gY2hlbWlzdHJ5IHRhYmxlLgotICJoeWRyb19yZXBvcnQiLCAicGFja2luZ19saXN0IiwgImJpbGxfb2ZfbGFkaW5nIiwgImludm9pY2UiLCAibGV0dGVyX29mX2NyZWRpdCIsICJvdGhlciIuCkZvciBhbnkgcGFnZV90eXBlIG90aGVyIHRoYW4gbXRjIC8gbXRjX2NvbnRpbnVhdGlvbiAvIGluc3BlY3Rpb25fb25seSwgcmV0dXJuIG9ubHkgcGFnZV90eXBlIGFuZCBsZWdpYmlsaXR5IGFuZApsZWF2ZSBldmVyeSBvdGhlciBmaWVsZCBudWxsIG9yIGVtcHR5LgoKSGVhZGVyIGZpZWxkcyAoYXMgcHJpbnRlZDsgbnVsbCB3aGVuIG5vdCBvbiB0aGlzIHBhZ2UpLiBXaGVyZSBhIG5hbWUgaXMgcHJpbnRlZCBpbiBDaGluZXNlIGFuZCBFbmdsaXNoLCBnaXZlIHRoZSBFbmdsaXNoLgotIGNlcnRfbm86IHRoZSBjZXJ0aWZpY2F0ZSBudW1iZXIgKCJOby4iLCAiQ2VydCBObyIsICJDZXJ0aWZpY2F0ZSBObyIsICJDZXJ0aWZpY2F0ZSBSZWZlcmVuY2UgTm8iLCAiQ0VSVElGSS5OTyIpLgogIE5ldmVyIHJldHVybiB0aGUgbGFiZWwgaXRzZWxmOiBpZiB0aGUgIk5vLiIgYm94IGlzIGVtcHR5LCBjZXJ0X25vIGlzIG51bGwuCi0gbWF0ZXJpYWxfbm86IGEgc2VwYXJhdGUgbWF0ZXJpYWwgLyBwcm9kdWN0IG51bWJlciB3aGVuIHByaW50ZWQgKEFyY2Vsb3JNaXR0YWw6ICJNYXRlcmlhbCBObyIpLgotIGNlcnRfdHlwZTogIjMuMSIsICIzLjIiLCAiMi4yIiBvciAiaW5zcGVjdGlvbiIgKEVOMTAyMDQgMy4xQiBjb3VudHMgYXMgMy4xKTsgaXQgbWF5IG9ubHkgYmUgaW4gYSByZW1hcmsgb3IgZm9vdGVyLgotIGRhdGVfYXNfd3JpdHRlbiAvIGRhdGVfaXNvOiB0aGUgY2VydGlmaWNhdGUgKGlzc3VlKSBkYXRlIC0gbWF5IGJlIGluIHRoZSBmb290ZXIgKCJEYXRlIG9mIFJlbGVhc2UiLCAiRmlsbGluZyBkYXRlCiAgWUVBUiAyMDExIE1PTlRIIDExIERBWSAyNSIsICLml6XmnJ8iKS4KLSBtaWxsOiB0aGUgbWFudWZhY3R1cmVyIHdob3NlIGxldHRlcmhlYWQgaXQgaXMgKGUuZy4gIkpJQU5HWUlOIENJVFkgU0VBTUxFU1MgU1RFRUwgVFVCRSBGQUNUT1JZIiwKICAiWkhBTkdRSVUgUlVJWUUgTUVDSEFOSUNBTCBDTy4sIExURCIsICJTSEFOR0hBSSBHQVRFV0FZIEZJVFRJTkdTIENPLiwgTFREIiwgIkFyY2Vsb3JNaXR0YWwgU291dGggQWZyaWNhIExpbWl0ZWQiKS4KLSBzdXBwbGllcjogYSB0cmFkZXIgLyBzdG9ja2lzdCBuYW1lZCBhcyBzZWxsZXIgb3IgY3VzdG9tZXIgd2hlbiBpdCBpcyBub3QgTVBTIG9yIFJvbmluIChOU1RLIC8gTmlwcG9uIFN0ZWVsIGFuZAogIFN1bWlraW4gQnVzc2FuLCBLZW5kbywgTWFjc3RlZWwsIEluY2xlZG9ucyk7IG51bGwgaWYgbm9uZS4KLSBjdXN0b21lcjogdGhlIGN1c3RvbWVyIC8gcHVyY2hhc2VyIC8gY29uc2lnbmVlIGFzIHByaW50ZWQuCi0gb3JkZXJfbnVtYmVyczogRVZFUlkgb3JkZXIsIGNvbnRyYWN0LCBQTywgaW52b2ljZSwgaW5kZW50IGFuZCByZWZlcmVuY2UgbnVtYmVyIHByaW50ZWQgYW55d2hlcmUgb24gdGhlIHBhZ2UgLSB0aGUKICBoZWFkZXIsIGEgc2FsZXMtY29udHJhY3QgYm94ICgiU0MgTm8uREYwOTQwL0RGMDk0MSIgLT4gREYwOTQwIGFuZCBERjA5NDEpLCB0aGUgU0hJUFBJTkcgTUFSS1MKICAoIk1QUy9BMjY2NTAvSzE4MzIvRFVSQkFOIiAtPiBBMjY2NTApIGFuZCB0aGUgZm9vdGVyLCBpbmNsdWRpbmcgdGhlIGRvY3VtZW50YXJ5IGNyZWRpdCAvIEwvQyBudW1iZXIKICAoIkRvY3VtZW50YXJ5IENyZWRpdCBOdW1iZXI6IElMMTYzNDFaQTA3MDQ5OTIiKSwgZXhhY3RseSBhcyBwcmludGVkLCBlYWNoIHdpdGggaXRzIGxhYmVsOgogIFt7ImxhYmVsIjogIk9SREVSIE5PIiwgInZhbHVlIjogIkRGMDkwNiJ9LCB7ImxhYmVsIjogIkNvbnRyYWN0IE5vIiwgInZhbHVlIjogIkE0MTI0OSJ9XS4KICBNUFMgb3JkZXJzIGxvb2sgbGlrZSBBNDEyNDksIFJvbmluIG9yZGVycyBsaWtlIERGMDkwNiwgY29udHJhY3RzIGxpa2UgQ05aQU4yMDE4OEdTLTEuCi0gcHJvZHVjdDogZS5nLiAiU0VBTUxFU1MgQ0FSQk9OIFNURUVMIFBJUEUiLCAiRkxBTkdFUyIsICJCVVRUIFdFTERJTkcgRklUVElOR1MiLgotIHN0YW5kYXJkOiB0aGUgc3BlY2lmaWNhdGlvbihzKSBhcyBwcmludGVkICgiQVNUTSBBMTA2IEIgLyBBUEkgNUwgWDQyIFBTTC0xIiwgIlNBTlMgMTEyMyIsICJBU1RNIEEyMzQgV1BCIikuCi0gZ3JhZGU6IHRoZSBzdGVlbCBncmFkZSAoWDQyLCBHci5CLCBTMzU1SlIsIFdQQiwgQTEwNSwgMzE2TCkuCgppdGVtczogb25lIGVudHJ5IHBlciBQUk9EVUNUIGxpbmUgKHRoZSBpdGVtIC8gc2l6ZSAvIHByb2R1Y3QgbGlzdCAtIG5vdCBhIHRlc3Qtc3VtbWFyeSByb3cpLiBBIHNpemUgdGhhdCBjb250aW51ZXMKb24gdGhlIG5leHQgcm93IHdpdGggbm8gbmV3IHF0eSBpcyBPTkUgbGluZToKICB7ImxpbmUiOiBudW1iZXJ8bnVsbCwgInByb2R1Y3QiOiAiUGlwZXxGbGFuZ2V8RWxib3cgOTB8RWxib3cgNDV8QmVuZHxUZWV8UmVkdWNlcnxDYXB8U3R1YiBlbmR8Li4uIiwKICAgImRlc2NyaXB0aW9uIjogdGV4dCBhcyBwcmludGVkLCAic2l6ZV90ZXh0Ijogc2l6ZSBhcyBwcmludGVkICgiMjE5LjEqMTIuNyoxMi4xOTIiLCAiMiAxLzJcIiIsICIyNTBOQiIsICJETjUwIiksCiAgICJzaXplMl90ZXh0Ijogc2Vjb25kIHNpemUgZm9yIHJlZHVjZXJzL3RlZXMgb3IgbnVsbCwgIm9kX21tIjogbnVtYmVyfG51bGwsICJ3dF90ZXh0Ijogd2FsbCB0aGlja25lc3Mgb3Igc2NoZWR1bGUgYXMKICAgcHJpbnRlZCAoIjEyLjciLCAiU0NIODAiLCAiU1REIiwgIjQuMm1tIiksICJjbGFzcyI6IHByZXNzdXJlIGNsYXNzIGFzIHByaW50ZWQgKCIxMDAwLzMiLCAiMTYwMC8zIiwgIjE1MCMiLCAiUE4xNiIsCiAgICJUMTAwMCIpLCAiZW5kcyI6IGVuZHMgLyBmYWNpbmcgKCJQRSIsICJCRSIsICJGRiIsICJSRiIsICJQTEZGIiksICJsZW5ndGhfbSI6IGxlbmd0aCBvZiBvbmUgcGllY2UgaW4gbWV0cmVzLAogICAicXR5IjogbnVtYmVyIG9mIFBJRUNFUywgInVuaXQiOiAicGNzIiAob3IgIm0iIC8gImtnIiB3aGVuIG9ubHkgdGhhdCBpcyBnaXZlbiksICJ0b3RhbF9tIjogdG90YWwgbWV0cmVzfG51bGwsCiAgICJ3ZWlnaHRfa2ciOiB3ZWlnaHQgaW4ga2cgKGEgY29sdW1uIGluIHRvbm5lcyAiV1QgKHQpIDM4LjA0MSIgPSAzODA0MSBrZyksCiAgICJoZWF0X25vIjogdGhlIEhFQVQgLyBDQVNUIC8gQ0hBUkdFIC8gTUVMVCBudW1iZXIgKOeCieWPtykgZm9yIHRoaXMgbGluZSAtIG5ldmVyIHRoZSBiYXRjaCwgbG90LCB3b3JrIG9yIE1GRyBudW1iZXIsCiAgICJiYXRjaCI6IGEgYmF0Y2ggLyBsb3QgLyBNRkcgLyB3b3JrIG51bWJlciBmb3IgdGhpcyBsaW5lLCBvciBudWxsfQogIEEgc2l6ZSBzdHJpbmcgbGlrZSAiOFwiKlhYUyo5LjE0NCIgb3IgIjE0XCIoMzU1LjYpKlM0MCgxMS4xMykqMTIxOTIiIGlzIFNJWkUgKiBXQUxMICogTEVOR1RIOiA5LjE0NCAvIDEyMTkyIGlzCiAgdGhlIGxlbmd0aCAobSAvIG1tKSwgbmV2ZXIgdGhlIHdhbGwgdGhpY2tuZXNzLgpoZWF0czogb25lIGVudHJ5IHBlciBoZWF0IChjYXN0IC8gY2hhcmdlIC8gbWVsdCkgbnVtYmVyIHdpdGggaXRzIGNoZW1pc3RyeSBhbmQgbWVjaGFuaWNhbCByZXN1bHRzLgogIFJlYWQgZWFjaCBjaGVtaXN0cnkgdmFsdWUgZnJvbSB0aGUgY29sdW1uIHdob3NlIEhFQURJTkcgaXMgdGhhdCBlbGVtZW50OiBtaWxscyBvcmRlciB0aGUgY29sdW1ucyBkaWZmZXJlbnRseQogIChDIFNpIE1uIFAgUywgQyBNbiBTaSBQIFMsIEMgU2kgTW4gUyBQIENyIFYgTW8gTmkgQ3UgLi4uKS4gV2hlbiB0aGUgdGFibGUgaGFzIGEgaGVhdCAvIGxhZGxlIC8gbWVsdGluZyByb3cgKEwsIFIsCiAgIkhlYXQiKSBhbmQgYSBwcm9kdWN0IHJvdyAoUCwgQywgIlByb2R1Y3QiKSwgZ2l2ZSB0aGUgaGVhdCByb3cuCiAgT25lIG1lY2ggZW50cnkgcGVyIHJlc3VsdCByb3cgb3IgcGFpciAoIigxKSBBY3R1YWwiLCAiKDIpIEFjdHVhbCIsICIzNjMvMzY0IiA9IHR3byBlbnRyaWVzKS4gV2hlbiBtZWNoYW5pY2FsIHJvd3MKICBjYXJyeSBubyBoZWF0IG51bWJlciB0aGV5IGZvbGxvdyB0aGUgaGVhdHMgaW4gdGhlIG9yZGVyIHRoZSBjZXJ0aWZpY2F0ZSBsaXN0cyB0aGVtLCBpbmNsdWRpbmcgaGVhdHMgbGlzdGVkIG9uCiAgZWFybGllciBwYWdlcyAobmFtZWQgYmVsb3cgdGhlIHByb21wdCB3aGVuIHRoZXJlIGFyZSBhbnkpLgogIHsiaGVhdF9ubyI6IHRleHQsICJncmFkZSI6IHRleHR8bnVsbCwKICAgImNoZW1fbXVsdGlwbGllciI6IHsiQyI6IDEwMCwgIlAiOiAxMDAwLCAuLi59IE9OTFkgd2hlbiB0aGUgY29sdW1uIGhlYWRpbmcgc2hvd3MgYSBmYWN0b3Igc3VjaCBhcyAiKjEwMCIgb3IgIngxMDAwIiwKICAgImNoZW0iOiB7IkMiOiBudW1iZXIsICJTaSI6IG51bWJlciwgIk1uIjogbnVtYmVyLCAiUCI6IG51bWJlciwgIlMiOiBudW1iZXIsICJDciI6IC4uLiwgIk5pIjogLi4uLCAiTW8iOiAuLi4sICJDdSI6IC4uLiwKICAgICAgICAgICAgIlYiOiAuLi4sICJOYiI6IC4uLiwgIlRpIjogLi4uLCAiQWwiOiAuLi4sICJOIjogLi4uLCAiQiI6IC4uLiwgIkNlcSI6IC4uLn0gLSB0aGUgUkVTVUxUIHJvdyBmb3IgdGhhdCBoZWF0LAogICAgICAgICAgICBudW1iZXJzIGV4YWN0bHkgYXMgcHJpbnRlZCAoZG8gbm90IGFwcGx5IHRoZSBmYWN0b3IgeW91cnNlbGYpOyBza2lwIHRoZSBzcGVjIG1pbiAvIG1heCByb3dzLAogICAibWVjaCI6IFt7InlpZWxkIjogbnVtYmVyfG51bGwsICJ0ZW5zaWxlIjogbnVtYmVyfG51bGwsICJ1bml0IjogIk1QYXxOL21tMnxrc2l8cHNpIiwgImVsb25nYXRpb25fcGN0IjogbnVtYmVyfG51bGwsCiAgICAgICAgICAgICAiaGFyZG5lc3MiOiB0ZXh0fG51bGwsICJpbXBhY3RfaiI6IG51bWJlcnxudWxsLCAiaXRlbV9saW5lIjogbnVtYmVyfG51bGx9XX0KSWYgdGhlIGl0ZW0gdGFibGUgZ2l2ZXMgdGhlIGhlYXQgbnVtYmVyIHBlciBsaW5lLCBldmVyeSBpdGVtIGhlYXRfbm8gbXVzdCBhbHNvIGFwcGVhciBpbiBoZWF0cy4KCmxlZ2liaWxpdHk6ICJnb29kfGZhaXJ8cG9vciIuClJldHVybiBPTkxZIHRoaXMgSlNPTiBvYmplY3Q6CnsicGFnZV90eXBlIjogIi4uLiIsICJjZXJ0X25vIjogbnVsbCwgIm1hdGVyaWFsX25vIjogbnVsbCwgImNlcnRfdHlwZSI6IG51bGwsICJkYXRlX2FzX3dyaXR0ZW4iOiBudWxsLAogImRhdGVfaXNvIjogbnVsbCwgIm1pbGwiOiBudWxsLCAic3VwcGxpZXIiOiBudWxsLCAiY3VzdG9tZXIiOiBudWxsLCAib3JkZXJfbnVtYmVycyI6IFtdLCAicHJvZHVjdCI6IG51bGwsCiAic3RhbmRhcmQiOiBudWxsLCAiZ3JhZGUiOiBudWxsLCAiaXRlbXMiOiBbXSwgImhlYXRzIjogW10sICJsZWdpYmlsaXR5IjogImdvb2QifQpDb3B5IG51bWJlcnMgYW5kIGNvZGVzIGV4YWN0bHkgYXMgcHJpbnRlZC4gVXNlIG51bGwgd2hlbiB5b3UgY2Fubm90IHJlYWQgYSB2YWx1ZSAtIGRvIG5vdCBndWVzcy4=").decode("utf-8")
