@@ -10,7 +10,11 @@ are matched to the SharePoint items afterwards (tc_rematch728.py) and written on
 Run by mps-tc-reread728.timer every 10 minutes; does nothing until the new reader is live, and nothing once every source
 is staged. The worker is paused while a source is read (its own PAUSE, after the worker's current page). Between
 21:50 and 22:25 the pause is given up for the nightly Ronin JT shadow pass. work/tc_reread728/STOP ends it after the
-page being read (the source it was on is read again from its first page next time).
+page being read.
+730 (Dino 16 Nov: "these aren't critical ... run from 21:00 to 03:00 the next day until they are finished and leave the
+worker open during the day"): it reads only between 21:00 and 03:00 and gives the worker back at 03:00. Every page
+answer is kept in work/tc_reread728/_cache/<source>/, so a source cut off at 03:00 goes on from its next page the
+following night instead of from its first.
     tc_reread728.py [--dry] [--test "<source>.pdf"]      (--test: that source only, with the reader that is live, into
                                                          work/tc_reread728_test/ - a check of this script)"""
 import atexit, glob, hashlib, json, os, signal, subprocess, sys, tempfile, time
@@ -29,6 +33,12 @@ dry = "--dry" in sys.argv
 test = sys.argv[sys.argv.index("--test") + 1] if "--test" in sys.argv[:-1] else None     # one source, the live reader, its own folder
 if test:
     ST = R / "work" / "tc_reread728_test"
+
+
+def night(now=None):
+    """730: 21:00 - 03:00, the hours the re-read may hold the worker."""
+    t = (now or datetime.now())
+    return t.hour >= 21 or t.hour < 3
 
 
 def say(*a):
@@ -63,7 +73,10 @@ if not dry and not test:
         sys.exit(0)
     if (ST / "STOP").is_file():
         sys.exit(0)
+    if not night():                                     # 730: the worker is left alone from 03:00 to 21:00
+        sys.exit(0)
 ST.mkdir(parents=True, exist_ok=True)
+READER_MD5 = md5(P / "tc_reader.py")
 
 import worker as W                                      # noqa: E402  (the pipeline's own reading, splitting and naming)
 T = W.tc_reader
@@ -146,30 +159,58 @@ def quiet_window(now=None):
     return (21, 50) <= (t.hour, t.minute) < (22, 25)
 
 
-class Stop(Exception):
+class Stop(BaseException):                              # not an Exception: tc_reader.read() records those as an unread page and goes on
     pass
 
 
 _read_page = T.read_page
 
 
-def read_page(*a, **k):                                 # between two pages: STOP, and the shadow pass's window
+CUR = {"stem": None, "cached": 0, "read": 0}
+
+
+def _cache_file(a, k):
+    """730: one file per page reading - everything that decides the answer except the file's path and the timeouts."""
+    a = list(a) + [None] * 10
+    what = {"page": a[1], "model": a[3], "few": a[4], "family": a[5], "px": a[6], "hint": hashlib.sha256(str(a[7] or "").encode()).hexdigest(),
+            "kw": {x: k[x] for x in sorted(k) if x not in ("timeout", "keep_alive")}, "reader": READER_MD5}
+    h = hashlib.sha256(json.dumps(what, sort_keys=True, default=str).encode()).hexdigest()[:24]
+    return ST / "_cache" / CUR["stem"] / f"p{int(a[1] or 0):04d}-{h}.json"
+
+
+def read_page(*a, **k):                                 # between two pages: STOP, the night hours, the shadow pass's window
+    cf = _cache_file(a, k) if CUR["stem"] and not test else None
+    if cf is not None and cf.is_file():                 # read on an earlier night
+        CUR["cached"] += 1
+        return json.loads(cf.read_text(encoding="utf-8"))["answer"]
     if (ST / "STOP").is_file():
         raise Stop("work/tc_reread728/STOP")
+    if not test and not night():
+        raise Stop("03:00 - goes on at 21:00")
     if quiet_window():
         release()
         say("pause given up for the Ronin JT shadow pass until 22:25")
         while quiet_window():
             time.sleep(30)
         pause()
-    return _read_page(*a, **k)
+    r = _read_page(*a, **k)
+    CUR["read"] += 1
+    if cf is not None:
+        try:
+            cf.parent.mkdir(parents=True, exist_ok=True)
+            tmp = cf.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"answer": r}, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, cf)
+        except (TypeError, ValueError, OSError):        # an answer that cannot be stored is simply read again
+            pass
+    return r
 
 
 T.read_page = read_page
 
 
 # ------------------------------------------------------------------------------------------------ one source
-def stage(name):
+def stage(name, accept_errors=False):
     stem = name[:-4]
     srcs = sorted(glob.glob(str(R / "done/TestCerts/*" / glob.escape(name))), key=os.path.getmtime)
     if not srcs:
@@ -184,8 +225,12 @@ def stage(name):
     out_dir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     docs = []
+    CUR.update(stem=stem, cached=0, read=0)
     with tempfile.TemporaryDirectory() as td:
         staged = w.read_tc("TestCerts", src, Path(name), {}, digest, [], Path(td))
+        bad = sum(1 for *_, extra in staged for q in extra.get("tc_pages") or [] if q.get("how") == "error")
+        if bad and not accept_errors:                   # 730: the pages that were read are kept; only the failed ones are read again
+            raise RuntimeError(f"{bad} page(s) could not be read")
         for page, part, fields, flags, doc_id, extractor, npages, secs, extra in staged:
             stem_out = w.output_stem("test_cert", fields, Path(name), page)
             hold_reason = w.hold_reason("TestCerts", "test_cert", fields, flags)
@@ -206,8 +251,10 @@ def stage(name):
                          "split_from": fields.get("split_from"), "items": fields.get("item_count"), "heats": fields.get("heat_count")})
     W.atomic_write_json(out_dir / "_done.json", {"source": name, "source_path": str(src.relative_to(R)), "source_sha256": digest,
                                                  "seconds": round(time.time() - t0), "documents": docs, "at": W.now_iso(),
-                                                 "reader_md5": md5(P / "tc_reader.py")})
-    say(f"{name}: {len(docs)} documents staged ({sum(1 for d in docs if d['held'])} would be held) in {time.time() - t0:.0f} s")
+                                                 "reader_md5": md5(P / "tc_reader.py"), "pages_read_now": CUR["read"],
+                                                 "pages_from_earlier_nights": CUR["cached"]})
+    say(f"{name}: {len(docs)} documents staged ({sum(1 for d in docs if d['held'])} would be held) in {time.time() - t0:.0f} s "
+        f"({CUR['read']} page readings now, {CUR['cached']} kept from earlier)")
     return len(docs)
 
 
@@ -217,7 +264,7 @@ if dry:
         print(n, "staged" if n not in todo else "to read", "| original", "found" if hit else "MISSING")
     print(f"{len(todo)} of {len(names)} to read; live reader {md5(P / 'tc_reader.py')[:8]} (reads start when it is {NEW_MD5}); "
           f"worker methods ok: {all(hasattr(w, m) for m in ('read_tc', 'output_stem', 'hold_reason', 'tc_document', 'tc_settings'))}; "
-          f"settings {w.tc_settings('TestCerts')}")
+          f"settings {w.tc_settings('TestCerts')}; night now: {night()}; cached page readings: {len(glob.glob(str(ST / '_cache/*/*.json')))}")
     sys.exit(0)
 
 say(f"re-read starts: {len(todo)} of {len(names)} sources to read with tc_reader {md5(P / 'tc_reader.py')[:8]}")
@@ -225,14 +272,14 @@ fails = json.loads((ST / "_fails.json").read_text()) if (ST / "_fails.json").is_
 pause()
 try:
     for name in todo:
-        if fails.get(name, 0) >= 2:
+        if fails.get(name, 0) >= 4:
             continue
         try:
-            stage(name)
+            stage(name, accept_errors=fails.get(name, 0) >= 2)     # a page that fails twice is staged as unread (flagged)
         except Stop as e:
-            say(f"stopped at {name}: {e}")
+            say(f"stopped at {name}: {e} ({CUR['read']} page readings this run, kept)")
             break
-        except Exception as e:                          # one bad source does not end the run; two tries each
+        except Exception as e:                          # one bad source does not end the run; four tries each
             fails[name] = fails.get(name, 0) + 1
             (ST / "_fails.json").write_text(json.dumps(fails), encoding="utf-8")
             say(f"{name}: FAILED ({fails[name]}): {str(e)[:300]}")
@@ -242,6 +289,6 @@ try:
 finally:
     release()
 left = [n for n in names if not (ST / n[:-4] / "_done.json").is_file()]
-if not [n for n in left if fails.get(n, 0) < 2] and not (ST / "STOP").is_file():
+if not [n for n in left if fails.get(n, 0) < 4] and not (ST / "STOP").is_file():
     (ST / "DONE").write_text(f"{datetime.now():%F %T} staged {len(names) - len(left)} of {len(names)}; failed twice: {left}\n", encoding="utf-8")
     say(f"all sources staged ({len(names) - len(left)} of {len(names)}); failed twice: {left or 'none'}")
