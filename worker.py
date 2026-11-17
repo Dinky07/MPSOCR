@@ -26,6 +26,10 @@ import cpu_invoice
 import sidecar_lock                       # one lock per sidecar for every writer (review F10, 28 Oct)
 import mps_jobs                           # job numbers, allocations, scan-date checks: one rule for every reader
 try:
+    import upright_step                   # 745 (17 Nov 2026): pages turned upright before any reader (mps-upright, RTX 2070 Super)
+except Exception:                         # the worker runs without it, reading scans as they are
+    upright_step = None
+try:
     import po_reader                      # the trained purchase-order reader (po_ocr_v2): prompt, worked examples, tidy
 except ImportError:                       # pragma: no cover - the worker still runs, with the generic PO prompt
     po_reader = None
@@ -1397,13 +1401,18 @@ class Worker:
         outputs = []
         try:
             with tempfile.TemporaryDirectory() as td:
+                # 745: rd is what the readers get: the scan with its pages turned upright (a copy in td), or the scan itself
+                # when nothing needs turning. work stays as scanned (its hash, the done/ archive, a re-queue).
+                rd, up_info = work, None
+                if upright_step and tcfg.get("upright", self.cfg.get("upright", True)) is not False:
+                    rd, up_info = upright_step.upright_copy(work, Path(td), folder, src.name, log)
                 if doc_type == "delivery_note":
                     # one scanned batch -> one document per delivery note (CPU only), published by process_delivery_notes
-                    self.process_delivery_notes(folder, src, work, digest, meta, tcfg, outputs)
+                    self.process_delivery_notes(folder, src, rd, digest, meta, tcfg, outputs)
                     parts = []
                 elif doc_type == "customer_order":
                     # one scan -> one document per customer PO (30 Oct); GPU only for orders whose lines don't add up
-                    self.process_customer_orders(folder, src, work, digest, meta, tcfg, outputs, gpu_ok)
+                    self.process_customer_orders(folder, src, rd, digest, meta, tcfg, outputs, gpu_ok)
                     parts = []
                 elif doc_type == "release_note":
                     # one scanned batch -> one document per release note + its supporting pages (28 Oct)
@@ -1411,12 +1420,12 @@ class Worker:
                         time.sleep(5)
                     if _stop:
                         raise OllamaDown("shutdown")
-                    self.process_release_notes(folder, src, work, digest, meta, tcfg, outputs)
+                    self.process_release_notes(folder, src, rd, digest, meta, tcfg, outputs)
                     parts = []
                 elif doc_type in ("ws", "test_cert"):
                     parts = []
                 else:
-                    parts = self.split(work, Path(td), tcfg)
+                    parts = self.split(rd, Path(td), tcfg)
                 presort_futs = self.presort_prefetch(parts, meta, src) if doc_type == "po" and len(parts) > 1 else {}
                 # one file = one document around its order form (Dino 29 Oct): pages grouped before publishing
                 grouping = bool(tcfg.get("group_pages")) and doc_type == "po" and len(parts) > 1
@@ -1424,13 +1433,13 @@ class Worker:
                 if doc_type == "ws":
                     if not ws_reader:
                         raise RuntimeError("ws_reader.py is missing beside worker.py")
-                    staged += self.read_ws_pages(work, Path(td) / "ws", meta.get("original_name") or src.name, digest)
+                    staged += self.read_ws_pages(rd, Path(td) / "ws", meta.get("original_name") or src.name, digest)
                 if doc_type == "test_cert":
                     while self.paused() and not _stop:
                         time.sleep(5)
                     if _stop:
                         raise OllamaDown("shutdown")
-                    staged += self.read_tc(folder, work, src, meta, digest, loaded_before, Path(td))
+                    staged += self.read_tc(folder, rd, src, meta, digest, loaded_before, Path(td))
                 for page, part in parts:
                     while self.paused() and not tcfg.get("cpu_first") and not _stop:
                         time.sleep(5)
@@ -1645,6 +1654,7 @@ class Worker:
                         **({"source_modified": meta["source_modified"]} if meta.get("source_modified") else {}),
                         "source_sha256": digest,
                         "source_page": page,
+                        **({"upright": up_info} if up_info else {}),     # 745: pages turned / left to check
                         "pages_read": npages,
                         "processed_at": now_iso(),
                         "seconds": round(secs, 1),
