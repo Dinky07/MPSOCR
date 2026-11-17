@@ -1151,7 +1151,7 @@ EDITABLE = {
            "quote_ref", "payment_terms", "signed_by", "writer", "delivery_address", "notes", "cancelled", "amended"),
     "pop": ("date", "amount", "statement_ref", "account_name", "creditor_code", "beneficiary_account", "from_account_name", "bank_reference"),
     "supplier_invoice": ("supplier_name", "supplier_vat_no", "invoice_number", "invoice_date", "order_ref", "job_number", "subtotal", "vat", "total"),
-    "jt": ("jt_number", "date", "job_number", "from", "to", "written_by"),
+    "jt": ("jt_number", "date", "job_number", "from", "to", "written_by", "jt_copy"),
     "delivery_note": ("dn_number", "date", "customer", "customer_account", "customer_order", "job_number", "deliver_to"),
     "ws": ("date", "sheet_no", "sheet_of", "project", "corrosion_int", "corrosion_ext", "destination", "job_number", "spec",
            "customer_dwg_no", "rev", "mps_dwg_no", "batch_no", "mto", "drawn_by", "status", "end_detail", "notes",
@@ -1170,7 +1170,8 @@ EDITABLE = {
 OUT_FIELDS = tuple(dict.fromkeys(OUT_FIELDS + tuple(k for ks in EDITABLE.values() for k in ks) + (
     "vat_number", "vat_numbers_seen", "vat_candidates", "order_date", "total_vat", "customer_name", "account_how",
     "account_note", "order_candidates", "order_number_from", "job_number_from", "lines_sum_excl", "lines_from",
-    "lines_from_workings", "project_lead_written", "project_lead_jobfile", "jobfile_order_number", "cod")))
+    "lines_from_workings", "project_lead_written", "project_lead_jobfile", "jobfile_order_number", "cod",
+    "jt_copy", "jt_copy_how")))                         # 760: the carbon copy of a JT (jt_copy.py, 752)
 EDIT_LINES = {"po": ("quantity", "description", "unit_price", "price_unit"),
               "supplier_invoice": ("item_code", "description", "quantity", "unit_price", "amount"),
               "jt": ("item_no", "quantity", "unit", "description"),
@@ -1184,7 +1185,15 @@ NUMERIC = {"amount", "subtotal", "vat", "total", "unit_price", "qty", "sheet_no"
            "quantity", "discount_pct", "line_total", "total_excl", "total_vat", "total_incl"}
 
 
+JT_COPIES = ("White", "Yellow", "Blue", "Pink", "Unknown")
+
+
 def _edit_value(k, v, doc_type):
+    if k == "jt_copy":                                   # 760: one of the four copies of the JT book, or Unknown
+        w = str(v or "").strip().capitalize()
+        if w and w not in JT_COPIES:
+            raise ValueError(f"JT copy: '{v}' - use White, Yellow, Blue, Pink or Unknown")
+        return w or None
     if k in ("cancelled", "amended", "stamped", "ifc_signed", "signed_off", "kusasa", "accepted", "cod", "lines_from_workings"):
         return str(v).strip().lower() in ("yes", "true", "1", "on")
     v = "" if v is None else str(v).strip()
@@ -2369,6 +2378,7 @@ table.lines.heats input{width:calc(7ch + 14px)}
 table.lines.heats input[data-h=heat_no],table.lines.heats input[data-h=grade]{width:calc(13ch + 14px)}
 .editbar .grow{flex:1}
 .tag.edited{color:var(--accent);border-color:var(--accent)}
+.tag.jtc{color:#222;border-color:#999}.jtc-White{background:#fff}.jtc-Yellow{background:#fff3a8;border-color:#d9c34a}.jtc-Blue{background:#cfe3ff;border-color:#7aa7e0}.jtc-Pink{background:#ffd6e3;border-color:#e08aa7}.jtc-Unknown{background:transparent;color:var(--muted,#888)}
 table.q td.tickc{text-align:center}
 .qscroll{max-height:70vh;overflow:auto}
 table.q thead th{position:sticky;top:0;z-index:2;background:var(--card);box-shadow:inset 0 -1px 0 var(--line)}
@@ -2668,7 +2678,7 @@ const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_n
     ["Date","date"],["Writer","writer"],["C.O.D","cod"],["Checked","checked",0,0,"tick"],["Total","total",1]],
   pop:[["Date","date"],["Amount","amount",1],["Statement ref","statement_ref"],["Account name","account_name",0,1],["Creditor code","creditor_code"],
     ["Paid from","from_account_name"],["Original folder","_folder",0,0,"wrap"],["Checked","checked",0,0,"tick"]],
-  jt:[["JT","jt_number",0,1],["Job","job_number"],["Date","date"],["From","from"],["Writer","written_by"]],
+  jt:[["JT","jt_number",0,1],["Job","job_number"],["Date","date"],["From","from"],["Writer","written_by"],["Copy","jt_copy",0,0,"copy"],["Checked","checked",0,0,"tick"]],
   sq:[["Quote ref","quote_ref",0,1],["Customer","customer",0,0,"wrap"],["Date","date"],["Total","total",1],["Kusasa","kusasa"],
     ["Accepted","accepted"],["Summary","summary",0,0,"wrap"],["Moved from","moved_from"]],
   od:[["Category","od_category"],["Document type","od_doc_type",0,0,"wrap"],["From","od_from",0,0,"wrap"],["Date","date"],
@@ -2730,7 +2740,7 @@ const HEAD={
     ["Creditor code","creditor_code"],["Beneficiary account","beneficiary_account"],["Paid from","from_account_name"],["Bank reference","bank_reference"],["Bank","bank",0,1]]},
   supplier_invoice:{title:"Invoice header",rows:[["Supplier","supplier_name"],["VAT number","supplier_vat_no"],["Invoice number","invoice_number"],["Invoice date","invoice_date"],
     ["Order ref","order_ref"],["Job number","job_number"],["Subtotal","subtotal"],["VAT","vat"],["Total","total"]]},
-  jt:{title:"Transfer header",rows:[["JT number","jt_number"],["Date","date"],["Job number","job_number"],["From","from"],["To","to"],["Written by","written_by"]]},
+  jt:{title:"Transfer header",rows:[["JT number","jt_number"],["Date","date"],["Job number","job_number"],["From","from"],["To","to"],["Written by","written_by"],["Copy (White, Yellow, Blue, Pink, Unknown)","jt_copy"],["Copy told from","jt_copy_how",1,1]]},
   delivery_note:{title:"Delivery note",rows:[["Delivery note (invoice)","dn_number"],["Number read from","number_read_from",1,1],["Date","date"],["Date printed","printed_date",1,1],
     ["Customer","customer"],["Account","customer_account"],["Customer order","customer_order"],["Job number","job_number"],["Deliver to","deliver_to",0,0,"wide"],
     ["Value excl VAT","total_excl",1,1],["Pages","pages",1,1],["Scan pages","source_pages",1,1],["Extra pages","extra_pages",1,1]]},
@@ -2917,7 +2927,8 @@ function docRows(t,list,held){
       +(RTYPES.length?` <select class="route" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" onclick="event.stopPropagation()" title="Wrong kind of document? Choose what it is: it goes to that queue and is read again there (or to Other Documents / Sales Quotes)"><option value="">Move to…</option>${moveOpts(t)}</select>`
        :ROUTE.length?` <select class="route" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" onclick="event.stopPropagation()" title="Wrong kind of document? Send it to the right queue: that queue's reader reads it again"><option value="">Move to…</option>${ROUTE.filter(r=>r.type!=t).map(r=>`<option value="${esc(r.type)}">${esc(r.label)}</option>`).join("")}</select>`:"");
     const fv=k=>k=="_folder"?x.source_folder:k=="_hold"?(HOLD[x.hold_reason]||x.hold_reason):f[k]??f[ALIAS[k]];
-    const cell=(k,n,isId,kind)=>kind=="tick"?`<input type="checkbox" class="tick" title="Tick once you have checked this order against the PDF (fills Checked in SharePoint)" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" ${f.checked?"checked":""}>`
+    const cell=(k,n,isId,kind)=>kind=="copy"?(f.jt_copy?`<span class="tag jtc jtc-${esc(f.jt_copy)}" title="${esc(f.jt_copy_how||"")}">${esc(f.jt_copy)}</span>`:"")
+      :kind=="tick"?`<input type="checkbox" class="tick" title="Tick once you have checked this document against the PDF (fills Checked in SharePoint where the library has the column)" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" ${f.checked?"checked":""}>`
       :n?esc(money(fv(k))):typeof fv(k)=="boolean"?(fv(k)?"Yes":""):(fv(k)!=null&&fv(k)!=="")?esc(fv(k)):isId?`<span class="muted" title="no number read; file name shown">${esc((x.file||x.name).replace(/\.(pdf|json)$/i,""))}</span>`:"";
     let r=`<tr class="doc" data-open="${esc(id)}">${cols.map(([l,k,n,isId,kind])=>`<td class="${n?"num":""}${kind=="wrap"?" wrap":""}${kind=="tick"?" tickc":""}">${cell(k,n,isId,kind)}</td>`).join("")}
       <td class="num">${x.item_count}</td><td class="chk">${checks(x)}</td><td class="act">${pdf} ${btn}</td></tr>`;
