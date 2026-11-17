@@ -2773,7 +2773,7 @@ const HEAD={
 const HOLD={not_in_sage:"Not in Sage yet: released automatically after the next Sage read",no_sage_copy:"No Sage copy on the share yet (sage_invoices.csv): released automatically when it arrives",
   not_a_delivery_note:"Not a delivery note (no barcode on the first page)",
   no_release_note:"Pages scanned before the first release note: not part of one",
-  no_job:"No job number: no sticker barcode and the PO number is not in Job File",several_jobs:"More than one job sticker on the page",
+  no_job:"No job number: no sticker barcode and the PO number is not in Job File",several_jobs:"More than one job sticker on the page",job_unconfirmed:"Job not read off one sticker: found from the order number by a near match, or the order number came from Job File - confirm the job",not_a_customer_order:"MPS's own purchase order (A-number), not a customer's order: Move to Purchase Orders",
   job_mismatch:"The PO number belongs to another job in Job File",vat_missing:"No customer VAT number printed: check the account, then release",
   vat_unknown:"The VAT number is on no Sage account (new customer or cash sale): set the account, then release",
   job_out_of_range:"Job number far above the newest job: misread sticker?",totals_mismatch:"Lines don't add up to the order total: correct them, then release",

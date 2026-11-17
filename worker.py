@@ -1858,7 +1858,7 @@ class Worker:
                 os.replace(pdf_dst.with_name(pdf_dst.name + ".tmp"), pdf_dst)
                 f = o["fields"]
                 f["content_hash"] = sha256(part).upper()
-                gpu = o.get("lines_from") == "gpu"
+                gpu = bool(o.get("gpu_ran")) or o.get("lines_from") == "gpu"     # 763: the model read it, whether or not its lines added up
                 sidecar = {
                     "schema_version": 1,
                     "doc_id": f"{digest[:16]}-p{o['pages'][0]:03d}",

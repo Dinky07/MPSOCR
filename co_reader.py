@@ -44,6 +44,26 @@ def digits(s):
     return re.sub(r"\D", "", str(s or ""))
 
 
+_OCR_FOLD = str.maketrans({"O": "0", "Q": "0", "D": "0", "I": "1", "L": "1", "S": "5", "B": "8", "Z": "2"})
+
+
+def ocr_key(s):
+    """763: an order number with the letters OCR swaps for digits folded (PO0004468 / POQ0G4468 still differ by one)."""
+    return norm(s).translate(_OCR_FOLD)
+
+
+def own_quote_ref(v):
+    """763: MPS's own quotation number (HYDRAULICO007a/AC/AA, PEL097a/AC/AA): the customer accepted MPS's quote; its
+    Document No is not the customer's order number (that is handwritten on it, or in Job File)."""
+    return bool(re.search(r"/[A-Z]{2}/[A-Z]{2}$", str(v or "").upper().strip()))
+
+
+def near_job(v, jobs):
+    """763: an 'order number' that is the job number read badly (33U-61 for the handwritten 33461E)."""
+    a = norm(v)
+    return any(len(a) >= 4 and edits(a, norm(j)) <= 2 for j in jobs if j)
+
+
 # --------------------------------------------------------------------------- lookups
 class Lookups:
     """Sage customers, sales-order history, Sage jobs and Job File orders, from CSVs (reloaded when they change)."""
@@ -91,14 +111,46 @@ class Lookups:
         self.jobs = {norm(r.get("JobNumber")) for r in self._rows("jobs_sage.csv") if r.get("Company") == "MPS"}
         self.jobfile = {}
         self.jobfile_by_order = defaultdict(list)
+        self.jobfile_by_order_ocr = defaultdict(list)     # 763: O/0, I/1, S/5, B/8 confusions folded
         for r in self._rows("jobfile_orders.csv"):
             j = norm(r.get("JobNumber"))
             self.jobfile[j] = r
-            if r.get("OrderNumber"):
+            if norm(r.get("OrderNumber")):          # 763: "#####" (Excel overflow typed into Job File) normalises to ""
                 self.jobfile_by_order[norm(r["OrderNumber"])].append(j)
-        self.max_job = max((int(j[:-1]) for j in self.jobs | set(self.jobfile) if re.fullmatch(r"\d{4,5}E", j)), default=0)
+                self.jobfile_by_order_ocr[ocr_key(r["OrderNumber"])].append(j)
+        nums = sorted(int(j[:-1]) for j in self.jobs | set(self.jobfile) if re.fullmatch(r"\d{4,5}E", j))
+        # 763: the newest real job, not a typo in Sage (36098E, 41021E, 55388E, 61659E made the job_out_of_range check
+        # dead): the highest number with at least 20 jobs in the 100 below it
+        import bisect
+        self.max_job = next((n for n in reversed(nums) if bisect.bisect_right(nums, n) - bisect.bisect_left(nums, n - 100) >= 20),
+                            nums[-1] if nums else 0)
 
     # VAT ---------------------------------------------------------------------------------------------------------
+    def jobs_for_order(self, order_number):
+        """763: the Job File jobs typed with this order number: exact, else with OCR look-alikes folded (GP0O13401 /
+        GPO13401: one extra or wrong character allowed on 7+ characters), unique only."""
+        k = norm(order_number)
+        if not k:
+            return [], None
+        hits = self.jobfile_by_order.get(k, [])
+        if hits:
+            return hits, "exact"
+        ok = ocr_key(order_number)
+        hits = self.jobfile_by_order_ocr.get(ok, [])
+        if hits:
+            return hits, "ocr"
+        if len(k) >= 4 and re.search(r"\d", k):    # the scan lost a site suffix Job File has (4580 / 4580-CWC)
+            suf = {j for key, js in self.jobfile_by_order.items() if key.startswith(k) and re.fullmatch(r"[A-Z]{2,4}", key[len(k):]) for j in js}
+            recent = {j for j in suf if re.fullmatch(r"\d{4,5}E", j) and self.max_job and int(j[:-1]) > self.max_job - 1000}
+            if len(suf) == 1 or len(recent) == 1:       # an old job with the same number years ago doesn't count
+                return list(recent if len(recent) == 1 else suf), "suffix"
+        if len(ok) >= 7:      # one character too many or too few only: a changed digit is often the next order number
+            near = {j for key, js in self.jobfile_by_order_ocr.items() if abs(len(key) - len(ok)) == 1
+                    and key[:2] == ok[:2] and edits(key, ok) == 1 for j in js}
+            if len(near) == 1:
+                return list(near), "ocr_near"
+        return [], None
+
     def match_vat(self, cand):
         """A read 10-digit number -> (Sage VAT number, how) or (None, None). One digit off from exactly one Sage VAT
         number counts as an OCR slip."""
@@ -247,10 +299,12 @@ _ORDER_LABELS = [
     (3, r"\bp\.?\s*o\.?\s*(?:number|no\b\.?|nr\b\.?|#)"),
     (2, r"\border\s*(?:number|no\b\.?|nr\b\.?|#)"),
     (2, r"\bdocument\s*(?:number|no\b\.?)"),
+    (2, r"(?:^|\s{2,})number\s*[:#]"),               # 763: a "NUMBER:" label standing alone (QTS orders)
     (1, r"standard\s*purchase\s*order"),
     (1, r"\bpurchase\s*order\b(?!\s*(?:number|no|date))"),
 ]
-_NOT_ORDER = re.compile(r"^(DATE|PAGE|COMPANY|REV|REVISION|TYPE|NO|NUMBER|ORDER|PURCHASE|DELIVERY|ACCOUNT|SUPPLIER|VAT|TEL|FAX|EMAIL|TO|FROM|OF)$", re.I)
+_NOT_ORDER = re.compile(r"^(DATE|PAGE|COMPANY|REV|REVISION|TYPE|NO|NUMBER|ORDER|PURCHASE|DELIVERY|ACCOUNT|SUPPLIER|VAT|TEL|FAX|EMAIL|TO|FROM|OF"
+                        r"|\d{1,2}(?:ST|ND|RD|TH))$", re.I)          # 763: "27th" (a date) was taken as an order number
 
 
 def order_candidates(text):
@@ -286,6 +340,18 @@ def order_candidates(text):
                     out.append((score, v))
             break
     return out
+
+
+def written_name(top, names):
+    """763: the FILE HANDED name top left; one OCR slip allowed on names of 5+ letters (REBECCH, WHITV)."""
+    exact = next((n for n in names if re.search(r"\b" + n + r"\b", top)), None)
+    if exact:
+        return exact
+    for w in re.findall(r"[A-Z]{4,9}", top):
+        near = [n for n in names if len(n) >= 5 and abs(len(n) - len(w)) <= 1 and edits(n, w) <= 1]
+        if len(near) == 1:
+            return near[0]
+    return None
 
 
 def header(texts, lk, c, scan_day=None):
@@ -324,9 +390,20 @@ def header(texts, lk, c, scan_day=None):
     else:
         f["vat_number"] = None
         flags.append("vat_unknown" if [d for d in seen if not lk.is_own(d)] else "vat_missing")
+    # 763: MPS's own purchase order form (letterhead, "ORDER A 85193") filed with the customer orders
+    if re.search(r"MINING\s+PRESSURE\s+SYSTEMS", "\n".join(first.splitlines()[:6]), re.I) and \
+            re.search(r"\bORDER\s+A\s?\d{5}\b", first) and not vats:
+        flags.append("not_a_customer_order")
     # order number
     cands = order_candidates(first) or order_candidates(text)
     cands.sort(key=lambda x: -x[0])
+    jobs_here = {norm(x) for t in texts for x in re.findall(r"(?<!\d)(\d{4,5}\s?[A-E])(?![A-Z0-9])", t)}
+    dropped = [v for _, v in cands if own_quote_ref(v) or near_job(v, jobs_here)]
+    if dropped:                                          # 763
+        f["order_candidates_dropped"] = dropped[:5]
+        if any(own_quote_ref(v) for v in dropped):
+            flags.append("mps_quote_as_order")
+        cands = [(sc, v) for sc, v in cands if v not in dropped]
     f["order_candidates"] = [v for _, v in cands][:5]
     f["order_number"] = cands[0][1] if cands else None
     # order date: next to a date label, else the first date on page 1
@@ -372,7 +449,7 @@ def header(texts, lk, c, scan_day=None):
         flags.append("totals_not_found")
     # the handwritten FILE HANDED name (top left of page 1)
     top = " ".join(first.splitlines()[:4]).upper()
-    f["project_lead_written"] = next((n for n in c["file_handed"] if re.search(r"\b" + n + r"\b", top)), None)
+    f["project_lead_written"] = written_name(top, c["file_handed"])
     return f, flags
 
 
@@ -439,14 +516,20 @@ def split_orders(barcodes, texts, c):
     starts an order. Two job barcodes on a page: the printed MPS JOB NUMBER decides."""
     groups = []
     for i, codes in enumerate(barcodes):
-        jobs = sorted({norm(x) for x in codes if JOB_RX.match(norm(x))})
+        jobs = sorted({norm(x) for x in codes if JOB_RX.match(norm(x))}, key=lambda j: (int(j[:-1]), j))      # 763: by number
         printed = [norm(x) for x in re.findall(r"MPS\s*JOB\s*NUMBER\s*[\r\n ]*(\d{4,5}\s?[A-E])\b", texts[i], re.I)]
         flags, how = [], "barcode"
         if len(jobs) > 1:
             pick = [j for j in jobs if j in printed]
+            nums = [(int(j[:-1]), j[-1]) for j in jobs]
             if len(pick) == 1:
                 flags.append("stray_job_barcode: " + ", ".join(j for j in jobs if j != pick[0]))
                 jobs = pick
+            elif len(jobs) == 2 and nums[0][1] == nums[1][1] and nums[1][0] == nums[0][0] + 1:
+                # 763: the cut-off barcode strip of the previous label on the roll above the sticker (17 Nov: 7 of 7
+                # pairs were n-1 / n, the sticker's own number is the higher one)
+                flags.append(f"stray_job_barcode: {jobs[0]} (strip of the previous label)")
+                jobs, how = [jobs[1]], "barcode_pair"
             else:
                 flags.append("several_jobs: " + ", ".join(jobs))
                 jobs = jobs[:1]
@@ -518,14 +601,21 @@ def _orders(groups, texts, lk, c, scan_day, name):
             alts = [norm(j) for j in sev.split(": ", 1)[1].split(", ")]
             fit = [j for j in alts if (lk.jobfile.get(j) or {}).get("OrderNumber")
                    and any(same_order(x, lk.jobfile[j]["OrderNumber"].strip().splitlines()[0]) for x in f.get("order_candidates", []))]
+            if len(fit) != 1:                            # 763: the Job File order number printed anywhere on the page
+                page = ocr_key(" ".join(ptexts))
+                fit = [j for j in alts if len(norm((lk.jobfile.get(j) or {}).get("OrderNumber"))) >= 5
+                       and re.search(r"\d", lk.jobfile[j]["OrderNumber"])
+                       and ocr_key(lk.jobfile[j]["OrderNumber"].strip().splitlines()[0]) in page]
             if len(fit) == 1:
                 job, job_from = fit[0], "barcode+jobfile"
                 flags[flags.index(sev)] = "stray_job_barcode: " + ", ".join(j for j in alts if j != fit[0])
         if not job:
-            hits = lk.jobfile_by_order.get(norm(f.get("order_number")), [])
+            hits, how = lk.jobs_for_order(f.get("order_number"))
             if len(hits) == 1:
-                job, job_from = hits[0], "jobfile_order_no"
+                job, job_from = hits[0], "jobfile_order_no" + ("" if how == "exact" else "_" + how)
                 flags.append("job_from_jobfile_order_no")
+                if how != "exact":                     # 763: a near match (OCR look-alike, lost suffix): a person confirms
+                    flags.append(f"job_unconfirmed: job {job} from Job File order {lk.jobfile[job].get('OrderNumber')} ({how} match)")
             else:
                 flags.append("no_job")
         f["job_number"], f["job_number_from"] = job, job_from
@@ -543,6 +633,10 @@ def _orders(groups, texts, lk, c, scan_day, name):
                 jo = norm(jfo)
                 cn = f.get("order_candidates", [])
                 hit = next((x for x in cn if same_order(x, jfo)), None)
+                if not hit and len(norm(jfo)) >= 5 and re.search(r"\d", jfo) and \
+                        (norm(jfo) in norm(" ".join(ptexts)) or ocr_key(jfo) in ocr_key(" ".join(ptexts))):
+                    hit = jfo                                # 763: printed on the order, under a label the rules don't know
+                    f["order_number_found"] = "on the page"
                 if hit:
                     f["order_number"], f["order_number_from"] = jfo, "scan_confirmed_by_jobfile"
                     if norm(hit) != jo:
@@ -550,6 +644,8 @@ def _orders(groups, texts, lk, c, scan_day, name):
                 elif not f.get("order_number"):
                     f["order_number"], f["order_number_from"] = jfo, "jobfile"
                     flags.append("order_number_from_jobfile")
+                    if job_from not in ("barcode", "printed"):       # 763: a job picked by a rule, not read: hold
+                        flags.append("job_unconfirmed: the order number was not read and the job was not read off one sticker")
                 else:
                     other = [j for j in lk.jobfile_by_order.get(norm(f["order_number"]), []) if j != job]
                     f["order_number_from"] = "scan"
@@ -565,8 +661,16 @@ def _orders(groups, texts, lk, c, scan_day, name):
                 pass
             if f.get("project_lead_written") and jf.get("FileHanded") and f["project_lead_written"] != jf["FileHanded"].upper():
                 flags.append(f"project_lead_differs: written {f['project_lead_written']}, Job File {jf['FileHanded']}")
+            if not jfo:
+                f["order_number_from"] = "scan" if f.get("order_number") else None     # 763: was left unset
         else:
             f["order_number_from"] = "scan" if f.get("order_number") else None
+        if job_from == "barcode_pair" and f.get("order_number_from") != "scan_confirmed_by_jobfile":
+            # 763: the higher of two consecutive barcodes, not confirmed by the Job File order number printed on the
+            # page: still a person's look (the job proposed is the likely one)
+            pair = next((x for x in flags if x.startswith("stray_job_barcode: ")), "")
+            flags.append(f"several_jobs: {pair.split(': ', 1)[1].split(' ')[0] if pair else '?'}, {job} ({job} proposed: in every pair seen the "
+                         "sticker's own barcode was the higher number; the Job File order number was not found on the page)")
         # account (decision 13)
         if f.get("vat_number"):
             account_from_vat(f, flags, lk)
@@ -590,7 +694,7 @@ def _orders(groups, texts, lk, c, scan_day, name):
     return orders
 
 
-HOLD = ("no_job", "several_jobs", "job_mismatch", "vat_missing", "vat_unknown", "job_out_of_range")
+HOLD = ("not_a_customer_order", "no_job", "several_jobs", "job_mismatch", "job_unconfirmed", "vat_missing", "vat_unknown", "job_out_of_range")
 
 
 def hold_reason(flags):
@@ -694,6 +798,24 @@ def apply_gpu(order, ans, lk, c):
                       "line_total": t})
     s = round(sum(i["line_total"] or 0 for i in items), 2)
     excl = f.get("total_excl") or num(ans.get("total_excl"))
+    rate = c["vat_rate"]
+    n_items = len(items)
+    if n_items >= 2 and n_items % 2 == 0 and items[: n_items // 2] and all(
+            (a["description"], a["line_total"]) == (b["description"], b["line_total"]) for a, b in zip(items[: n_items // 2], items[n_items // 2:])) \
+            and excl and abs(s / 2 - excl) <= 1.0:
+        items = items[: n_items // 2]                     # 763: the model listed every line twice (Northam 31375E)
+        s = round(sum(i["line_total"] or 0 for i in items), 2)
+        flags.append("gpu_lines_listed_twice")
+    if items and excl and abs(s - excl * (1 + rate)) <= 1.0 and abs(s - excl) > 1.0:
+        # 763: the model took the "Total (Incl)" column as the line total (ECS 33533E): back to excl when every line
+        # is quantity x unit price x (1 + VAT)
+        if all(i["quantity"] is not None and i["unit_price"] is not None and i["line_total"] is not None
+               and abs(i["quantity"] * i["unit_price"] * (1 - (i["discount_pct"] or 0) / 100) * (1 + rate) - i["line_total"]) <= 0.05 * max(1, i["line_total"])
+               for i in items):
+            for i in items:
+                i["line_total"] = round(i["quantity"] * i["unit_price"] * (1 - (i["discount_pct"] or 0) / 100), 2)
+            s = round(sum(i["line_total"] for i in items), 2)
+            flags.append("gpu_lines_were_incl_vat")
     ok = bool(items) and excl is not None and abs(s - excl) <= 1.0
     printed = order.get("_page_numbers", set())
     if not ok and items and excl is None and round(s, 2) in printed:
@@ -713,8 +835,41 @@ def apply_gpu(order, ans, lk, c):
     if not f.get("total_excl") and num(ans.get("total_excl")):
         f["total_excl"], f["total_vat"], f["total_incl"] = num(ans.get("total_excl")), num(ans.get("total_vat")), num(ans.get("total_incl"))
         flags[:] = [x for x in flags if x != "totals_not_found"] + ["totals_from_gpu"]
-    if not f.get("order_number") and ans.get("order_number"):
-        f["order_number"], f["order_number_from"] = str(ans["order_number"]).strip(), "gpu"
+    jf = lk.jobfile.get(order.get("job") or "") or {}
+    try:
+        jv = float(jf.get("OrderValue") or "")
+    except ValueError:
+        jv = None
+    if not ok and items and jv and s and (abs(s * (1 + rate) - jv) <= max(1.5, 0.001 * jv) or abs(s - jv) <= max(1.5, 0.001 * jv)):
+        # 763: no total on the page the rules could use, but the lines add up to the value typed in Job File (incl. VAT,
+        # or excl. where it was typed so): the lines and that total stand, marked
+        f["total_excl"] = s
+        f["total_vat"] = round(s * rate, 2)
+        f["total_incl"] = round(s * (1 + rate), 2)
+        excl, ok = s, True
+        flags[:] = [x for x in flags if x != "totals_not_found"] + ["totals_from_jobfile_value"]
+    if f.get("total_excl") and (f.get("total_incl") in (None, 0) or (f.get("total_incl") == f["total_excl"] and not f.get("total_vat"))):
+        v = round(f["total_excl"] * rate, 2)              # 763: incl. missing, or the model copied excl. into incl.
+        if round(f["total_excl"] + v, 2) in printed or "totals_from_jobfile_value" in flags:
+            f["total_vat"], f["total_incl"] = v, round(f["total_excl"] + v, 2)
+    go = str(ans.get("order_number") or "").strip()
+    if go and (own_quote_ref(go) or near_job(go, [order.get("job")])):
+        go = ""
+    if go and not f.get("order_number"):
+        f["order_number"], f["order_number_from"] = go, "gpu"
+    elif go and f.get("order_number_from") == "jobfile":
+        # 763: the order number came from Job File (nothing labelled on the page). The model read one off the image:
+        # the same -> confirmed; another -> the scan's number stands and Job File is checked against it
+        if same_order(go, f["order_number"]):
+            f["order_number_from"] = "gpu_confirmed_by_jobfile"
+            flags[:] = [x for x in flags if x != "order_number_from_jobfile" and not x.startswith("job_unconfirmed")]
+        else:
+            jfo = f["order_number"]
+            f["order_number"], f["order_number_from"] = go, "gpu"
+            flags[:] = [x for x in flags if x != "order_number_from_jobfile"]
+            other, _ = lk.jobs_for_order(go)
+            other = [j for j in other if j != order.get("job")]
+            flags.append(f"job_mismatch: order {go} is Job File {other[0]}" if len(other) == 1 else f"jobfile_order_number_differs: {jfo}")
     if not f.get("vat_number") and ans.get("customer_vat_number"):
         v, how = lk.match_vat(digits(ans["customer_vat_number"]))
         if v:
@@ -722,8 +877,7 @@ def apply_gpu(order, ans, lk, c):
             flags[:] = [x for x in flags if x not in ("vat_missing", "vat_unknown")] + ["vat_from_gpu"]
             account_from_vat(f, flags, lk)
     if not f.get("project_lead_written") and ans.get("written_name_top_left"):
-        nm = str(ans["written_name_top_left"]).upper().strip()
-        f["project_lead_written"] = nm if nm in c["file_handed"] else None
+        f["project_lead_written"] = written_name(str(ans["written_name_top_left"]).upper().strip(), c["file_handed"])
     f["gpu_lines_sum_excl"] = s
     if ok:
         f["items"], f["lines_sum_excl"], f["line_count"] = items, s, len(items)
@@ -733,6 +887,7 @@ def apply_gpu(order, ans, lk, c):
         order["lines_from"] = "none"
     order["needs_gpu"] = False
     order["hold"] = hold_reason(flags) or (None if ok else "totals_mismatch")
+    order["gpu_ran"] = True
     return order
 
 
@@ -742,6 +897,11 @@ REVIEW_TEXT = {
     "job_mismatch": "The PO number belongs to another job in Job File", "vat_missing": "No customer VAT number on the order",
     "vat_unknown": "VAT number on no Sage account", "job_out_of_range": "Job number far above the newest job",
     "totals_mismatch": "Lines don't add up to the order total", "account_check": "Account not settled by VAT / PO history",
+    "job_unconfirmed": "Job not read off one sticker and no order number read to confirm it",
+    "not_a_customer_order": "MPS's own purchase order (A-number), not a customer's order: Move to Purchase Orders",
+    "mps_quote_as_order": "MPS's own quotation accepted as the order: its Document No is not the order number",
+    "totals_from_jobfile_value": "Total taken from the lines, which add up to the Job File value",
+    "gpu_lines_were_incl_vat": "Line totals were incl. VAT: worked back to excl.",
 }
 SETTLED = ("single_vat", "po_history", "manual")
 
