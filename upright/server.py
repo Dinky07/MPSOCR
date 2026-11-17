@@ -8,6 +8,9 @@ Every page is asked four times (as it is, and turned 90, 180 and 270 degrees clo
 orientation of the original page; the page is "confident" when at least three of the four agree.
 
   GET  /health
+  POST /ocr     {"pdf": "/scans/...pdf", "pages": [1] (optional: all), "px": 2400 (optional)}   (755, 17 Nov)
+        -> {"pages": [{"page": 1, "lines": [{"text": "...", "score": 0.98, "box": [x0, y0, x1, y1]}], "width": w, "height": h}]}
+        PaddleOCR PP-OCRv5 server detection + recognition, for the CPU readers' second reading. Loaded on first use.
   POST /orient   {"pdf": "/scans/...pdf", "pages": [1, 2] (optional: all), "px": 768 (optional)}
         -> {"pages": [{"page": 1, "turn": 180, "confident": true, "votes": 4, "labels": [...], "scores": [...]}], "ms": 41}
      "turn" = degrees clockwise the page has to be turned to stand upright (the PDF /Rotate convention).
@@ -29,8 +32,23 @@ LOCK = threading.Lock()
 ENGINE = None
 
 
+PROVIDERS = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+OCR = None
+
+
+def _session_provider(model_dir_glob):
+    """The provider a plain ONNX Runtime session on the model gets (what PaddleOCR's own session gets too)."""
+    import glob, onnxruntime as ort
+    files = glob.glob(model_dir_glob)
+    if not files:
+        return None
+    return ort.InferenceSession(files[0], providers=PROVIDERS).get_providers()[0]
+
+
 def load():
-    """ONNX Runtime with the CUDA provider when it is there, the CPU otherwise."""
+    """ONNX Runtime with the CUDA provider (the 2070 Super), the CPU when it is not there.
+    755: the providers are passed in engine_config. device="gpu:0" (734) went through ONNX Runtime's plugin-device
+    lookup, which this build does not have ("No registered plugin EP device found"), and the model ran on the CPU."""
     import onnxruntime as ort
     try:
         ort.preload_dlls()
@@ -39,18 +57,48 @@ def load():
     STATE["onnxruntime"] = ort.__version__
     STATE["providers_available"] = ort.get_available_providers()
     from paddleocr import DocImgOrientationClassification
-    want = os.environ.get("UPRIGHT_DEVICE", "gpu:0")
-    if "CUDAExecutionProvider" not in STATE["providers_available"]:
-        STATE["gpu_error"] = "CUDAExecutionProvider not available"
-        want = "cpu"
     try:
-        m = DocImgOrientationClassification(model_name=MODEL, engine="onnxruntime", device=want)
+        m = DocImgOrientationClassification(model_name=MODEL, engine="onnxruntime", engine_config={"providers": PROVIDERS})
     except Exception as e:
         STATE["gpu_error"] = repr(e)[:300]
-        want = "cpu"
-        m = DocImgOrientationClassification(model_name=MODEL, engine="onnxruntime", device="cpu")
-    STATE["device"] = want
+        m = DocImgOrientationClassification(model_name=MODEL, engine="onnxruntime", engine_config={"providers": ["CPUExecutionProvider"]})
+    prov = _session_provider("/models/paddlex/official_models/PP-LCNet_x1_0_doc_ori_onnx/*.onnx")
+    STATE["device"] = {"CUDAExecutionProvider": "gpu (2070 Super)", "CPUExecutionProvider": "cpu"}.get(prov, prov or "unknown")
     return m
+
+
+def ocr_engine():
+    global OCR
+    if OCR is None:
+        from paddleocr import PaddleOCR
+        OCR = PaddleOCR(text_detection_model_name="PP-OCRv5_server_det", text_recognition_model_name="PP-OCRv5_server_rec",
+                        use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False,
+                        engine="onnxruntime", engine_config={"providers": PROVIDERS})
+        STATE["ocr_loaded"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    return OCR
+
+
+def ocr_pdf(path, pages=None, px=2400):
+    out = []
+    with LOCK:
+        eng = ocr_engine()
+        pdf = pdfium.PdfDocument(path)
+        try:
+            n = len(pdf)
+            for p in (pages or range(1, n + 1)):
+                if not 1 <= p <= n:
+                    continue
+                im = render(pdf, p, px)
+                arr = np.ascontiguousarray(np.asarray(im)[:, :, ::-1])
+                r = eng.predict(arr)[0]
+                d = r.json.get("res", r.json) if hasattr(r, "json") else dict(r)
+                lines = [{"text": t, "score": round(float(sc), 4), "box": [int(v) for v in b]}
+                         for t, sc, b in zip(d.get("rec_texts", []), d.get("rec_scores", []), d.get("rec_boxes", []))]
+                out.append({"page": p, "width": im.size[0], "height": im.size[1], "lines": lines})
+                STATE["ocr_pages"] = STATE.get("ocr_pages", 0) + 1
+        finally:
+            pdf.close()
+    return out
 
 
 def _label(res):
@@ -142,11 +190,14 @@ class H(BaseHTTPRequestHandler):
         t0 = time.time()
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-            if not self.path.startswith("/orient"):
-                return self._send(404, {"error": "POST /orient"})
+            if not self.path.startswith(("/orient", "/ocr")):
+                return self._send(404, {"error": "POST /orient or /ocr"})
             path = os.path.realpath(body.get("pdf") or "")
             if not path.startswith("/scans/") or not os.path.isfile(path):
                 return self._send(400, {"error": "pdf must be a file under /scans"})
+            if self.path.startswith("/ocr"):
+                pages = ocr_pdf(path, body.get("pages"), int(body.get("px") or 2400))
+                return self._send(200, {"pages": pages, "ms": int((time.time() - t0) * 1000)})
             pages = orient_pdf(path, body.get("pages"), int(body.get("px") or PX))
             STATE["requests"] += 1
             STATE["last"] = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "pdf": path, "pages": len(pages), "ms": int((time.time() - t0) * 1000)}
