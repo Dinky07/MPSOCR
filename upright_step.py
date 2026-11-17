@@ -13,7 +13,10 @@ Which way up a page is comes from the mps-upright container on the RTX 2070 Supe
 each page looked at in four directions). The rule that gave no wrong turn on the 586-page test of 17 Nov:
   - turn a page when all four looks agree and a sure Tesseract check does not say otherwise;
   - three of four looks are enough when a sure Tesseract check agrees;
-  - anything else that looks turned is left as scanned and written to the ledger as "flag".
+  - anything else that looks turned is left as scanned and written to the ledger as "flag";
+  - (746, 17 Nov) when the pages of one scan want quarter turns in opposite directions (some 90, some 270), none of
+    them is turned and all are flagged. A scan's pages normally lie the same way; the Saheti School drawings of
+    17 Nov had both checks agreeing on the wrong direction for one page, which this catches.
 A turned copy is asked about once more; if a turned page does not then stand upright the copy is thrown away.
 
 Anything going wrong here (container down, odd PDF, missing tool) leaves the file exactly as it was: the worker reads
@@ -110,7 +113,14 @@ def upright_copy(work, td, folder, name=None, log=None):
         if not cand:
             return work, None
         turns, flagged, rows, at = {}, {}, [], time.strftime("%Y-%m-%dT%H:%M:%S")
+        # 746: quarter turns both ways within one scan -> none of them is trusted
+        mixed = {90, 270} <= {p["turn"] for p in cand if p.get("votes", 0) >= 3}
         for p in cand:
+            if mixed and p["turn"] in (90, 270):
+                flagged[p["page"]] = p["turn"]
+                rows.append([at, folder, name, p["page"], "flag", p["turn"], p["votes"], " ".join(map(str, p.get("labels", []))), "", "",
+                             "pages of this scan point both ways (90 and 270): none turned"])
+                continue
             osd = _osd(work, p["page"])
             act = decide(p, osd)
             if act == "turn":
