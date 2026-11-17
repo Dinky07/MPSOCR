@@ -30,6 +30,10 @@ try:
 except Exception:
     jt_copy = None
 try:
+    import paddle_text                    # 761 (17 Nov 2026): PaddleOCR text as the GPU's hint + number/total check
+except Exception:
+    paddle_text = None
+try:
     import upright_step                   # 745 (17 Nov 2026): pages turned upright before any reader (mps-upright, RTX 2070 Super)
 except Exception:                         # the worker runs without it, reading scans as they are
     upright_step = None
@@ -1475,6 +1479,14 @@ class Worker:
                                 raise GpuUnavailable(", ".join(reasons))
                             extra["cpu_rejected"] = reasons
                             hint = (text, text_src) if text_src == "tesseract" else None
+                            if hint and doc_type == "supplier_invoice" and paddle_text and tcfg.get("paddle_text", True) is not False:
+                                pt = paddle_text.read(part, int(tcfg.get("max_pages", self.cfg.get("max_pages_per_doc", 4))), log=log)
+                                if pt:                       # 761: PaddleOCR (2070 Super) read the scan: its text is the hint
+                                    hint = (pt, "paddleocr")
+                                    extra["hint_source"] = "paddleocr"
+                                    extra["_paddle_text"] = pt
+                                else:
+                                    extra["hint_source"] = "tesseract (PaddleOCR not available)"
                             raw, npages = extract_builtin(doc_type, part, self.cfg, tcfg, hint)
                             extractor = "gpu_after_cpu"
                     elif tcfg.get("command"):
@@ -1614,6 +1626,11 @@ class Worker:
                             fields.update(jt_copy.classify(part))    # 751: which copy of the carbon JT (paper colour, receiver box)
                     if extractor != "cpu" and doc_type == "supplier_invoice":
                         fields, flags = self.fix_invoice_from_text(fields, flags, part, text, tcfg, extra)
+                    pt = extra.pop("_paddle_text", None)
+                    if pt and doc_type == "supplier_invoice":       # 761: is what the GPU read printed on the scan?
+                        chk = paddle_text.verify(fields, pt)
+                        extra["text_check"] = {"against": "paddleocr", "ok": not chk, **({"failed": chk} if chk else {})}
+                        flags = list(flags) + ["check: " + c for c in chk]
                     if extractor != "cpu" and doc_type == "supplier_invoice" and self.suppliers \
                             and not {"missing_supplier_name", "totals_mismatch"} & set(flags):
                         self.suppliers.learn(fields.get("supplier_vat_no"), fields.get("supplier_name"))
