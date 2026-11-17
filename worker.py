@@ -26,6 +26,10 @@ import cpu_invoice
 import sidecar_lock                       # one lock per sidecar for every writer (review F10, 28 Oct)
 import mps_jobs                           # job numbers, allocations, scan-date checks: one rule for every reader
 try:
+    import jt_copy                        # 751 (17 Nov 2026): white / yellow / blue / pink copy of the carbon JT
+except Exception:
+    jt_copy = None
+try:
     import upright_step                   # 745 (17 Nov 2026): pages turned upright before any reader (mps-upright, RTX 2070 Super)
 except Exception:                         # the worker runs without it, reading scans as they are
     upright_step = None
@@ -1606,6 +1610,8 @@ class Worker:
                     else:
                         fields, flags = normalise(doc_type, raw, self.cfg, tcfg.get("cpu", {}).get("own_vat_numbers", ()))
                         fields.setdefault("content_hash", sha256(part).upper())   # the library's Content Hash (dedupe, links)
+                        if doc_type == "jt" and jt_copy and tcfg.get("jt_copy", folder == "JobTransfers") is not False:
+                            fields.update(jt_copy.classify(part))    # 751: which copy of the carbon JT (paper colour, receiver box)
                     if extractor != "cpu" and doc_type == "supplier_invoice":
                         fields, flags = self.fix_invoice_from_text(fields, flags, part, text, tcfg, extra)
                     if extractor != "cpu" and doc_type == "supplier_invoice" and self.suppliers \
