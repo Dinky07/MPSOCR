@@ -195,23 +195,54 @@ def cpu_state():
 
 
 def gpu_state():
+    """737 (17 Nov 2026): every card with what runs on it. Until now only the first card nvidia-smi lists was read,
+    which since the RTX 2070 Super went in is the 2070, not the card the readers use. The single-card fields
+    (name, util, ...) are kept and describe the card with the most memory (the readers' card)."""
     if not shutil.which("nvidia-smi"):
         return {"present": False}
-    rc, out, err = run(["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
+    rc, out, err = run(["nvidia-smi", "--query-gpu=index,uuid,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
                         "--format=csv,noheader,nounits"])
     if rc != 0 or not out:
         return {"present": True, "error": err[:150]}
-    name, util, used, total, temp, power = [x.strip() for x in out.splitlines()[0].split(",")]
-    rc, apps, _ = run(["nvidia-smi", "--query-compute-apps=pid,process_name,used_memory", "--format=csv,noheader,nounits"])
-    procs = []
+    gpus = []
+    for line in out.splitlines():
+        p = [x.strip() for x in line.split(",")]
+        if len(p) == 8:
+            gpus.append({"index": p[0], "uuid": p[1], "name": p[2], "util": p[3], "mem_used": p[4], "mem_total": p[5],
+                         "temp": p[6], "power": p[7], "procs": []})
+    if not gpus:
+        return {"present": True, "error": "nvidia-smi listed no card"}
+    rc, apps, _ = run(["nvidia-smi", "--query-compute-apps=gpu_uuid,pid,process_name,used_memory", "--format=csv,noheader,nounits"])
     for line in apps.splitlines():
         parts = [x.strip() for x in line.split(",")]
-        if len(parts) == 3:
-            pid, pname, mem = parts
+        if len(parts) == 4:
+            uuid, pid, pname, mem = parts
             rc2, cmdline, _ = run(["ps", "-o", "args=", "-p", pid], 3)
-            procs.append({"pid": pid, "name": os.path.basename(pname), "mem_mb": mem, "cmd": cmdline[:160]})
-    return {"present": True, "name": name, "util": util, "mem_used": used, "mem_total": total,
-            "temp": temp, "power": power, "procs": procs}
+            for g in gpus:
+                if g["uuid"] == uuid:
+                    g["procs"].append({"pid": pid, "name": os.path.basename(pname), "mem_mb": mem, "cmd": cmdline[:160]})
+
+    def _mb(g):
+        try:
+            return float(g["mem_total"])
+        except ValueError:
+            return 0.0
+    gpus.sort(key=_mb, reverse=True)                      # the readers' card first
+    st = {"present": True, "gpus": gpus}
+    st.update({k: gpus[0][k] for k in ("name", "util", "mem_used", "mem_total", "temp", "power", "procs")})
+    return st
+
+
+def upright_state():
+    """737: the page-orientation service on the RTX 2070 Super (container mps-upright, 127.0.0.1:8091)."""
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8091/health", timeout=2) as r:
+            h = json.load(r)
+        return {"up": True, "device": h.get("device"), "pages": h.get("pages"), "requests": h.get("requests"),
+                "turned": h.get("turned"), "not_confident": h.get("not_confident"), "errors": h.get("errors"),
+                "started": h.get("started"), "last": h.get("last"), "smoke_ok": (h.get("smoke") or {}).get("ok")}
+    except Exception as e:
+        return {"up": False, "error": str(e)[:120]}
 
 
 def count_files(d, pattern=None):
@@ -518,6 +549,7 @@ def status(cfg):
         "sync_all_on": not (flags / "sync_off").exists(),
         "ollama": ollama_state(cfg),
         "gpu": cached("gpu", 10, gpu_state),
+        "upright": cached("upright", 10, upright_state),                  # 737
         "cpu": cached("cpu", 10, cpu_state),                              # 491
         "alerts": alert_flags(root),
         "types": rows,
@@ -2502,10 +2534,19 @@ function render(d){
   const cp=d.cpu||{},cpx=cp.util==null&&cp.temp==null?"":`<div class="sec" style="margin-top:8px">CPU</div><div class="big">${cp.util??"?"}% · ${cp.temp??"?"}°C</div>
     <div class="small muted">load ${cp.load??"?"} on ${cp.threads??"?"} threads</div><div class="bar"><i style="width:${Math.min(100,+cp.util||0)}%"></i></div>`;   // 491
   if(!g.present||g.error)gx=`<div class="card"><h2><span class="dot bad"></span>GPU · CPU</h2><div class="big">${g.present?"error":"not found"}</div><div class="small muted">${esc(g.error||"")}</div>${cpx}</div>`;
-  else{const pct=Math.round(100*g.mem_used/g.mem_total);
-    gx=`<div class="card"><h2><span class="dot ${+g.util>0?"ok":""}"></span>GPU · CPU</h2><div class="big">${g.util}% · ${g.temp}°C</div>
-    <div class="small muted">${esc(g.name)} · ${(g.mem_used/1024).toFixed(1)} / ${(g.mem_total/1024).toFixed(0)} GB</div><div class="bar"><i style="width:${pct}%"></i></div>
-    ${g.procs.map(p=>`<div class="small" title="${esc(p.cmd)}" style="margin-top:4px">${esc(p.name)} · ${p.mem_mb} MB <span class="muted">${esc(p.cmd.includes("train")?"(training)":p.cmd.includes("ollama")?"(Ollama)":"")}</span></div>`).join("")}${cpx}</div>`}
+  else{const gl=g.gpus&&g.gpus.length?g.gpus:[g],up=d.upright||{};      // 737: every card and what it runs
+    const what=p=>{const c=p.cmd||"";
+      if(c.includes("llama-server")||c.includes("ollama"))return "Ollama: "+((o.loaded||[]).map(m=>m.name).join(", ")||"loading a model");
+      if(c.includes("/app/server.py"))return "Upright check (PaddleOCR)"+(up.up?" · "+(up.pages||0)+" pages since "+String(up.started||"").slice(5,16).replace("T"," "):"");
+      if(c.includes("evaltest"))return "Upright accuracy test";
+      if(c.includes("train")||c.includes("unsloth"))return "Training";
+      return p.name};
+    gx=`<div class="card"><h2><span class="dot ${gl.some(x=>+x.util>0)?"ok":""}"></span>GPU · CPU</h2>`+gl.map((x,i)=>{const pct=Math.round(100*x.mem_used/x.mem_total);
+      return `<div class="sec"${i?' style="margin-top:8px"':""}>${esc(String(x.name).replace("NVIDIA GeForce ",""))}</div><div class="big">${x.util}% · ${x.temp}°C</div>
+    <div class="small muted">${(x.mem_used/1024).toFixed(1)} / ${(x.mem_total/1024).toFixed(0)} GB${isNaN(+x.power)?"":" · "+Math.round(+x.power)+" W"}</div><div class="bar"><i style="width:${pct}%"></i></div>
+    ${x.procs.length?x.procs.map(p=>`<div class="small" title="${esc(p.cmd)}" style="margin-top:4px"><b>${esc(what(p))}</b> · ${p.mem_mb} MB</div>`).join(""):`<div class="small muted" style="margin-top:4px">Nothing running on this card</div>`}`}).join("")
+      +(up.up&&!gl.some(x=>x.procs.some(p=>(p.cmd||"").includes("/app/server.py")))?`<div class="small muted" style="margin-top:4px">Upright check is up on ${esc(up.device||"?")} (no card memory in use)</div>`:"")
+      +(up.up===false?`<div class="small muted" style="margin-top:4px">Upright check: not running</div>`:"")+cpx+`</div>`}
   const sy=d.sync||{},every=d.sync_every_minutes||15;const stale=sy.age==null||sy.age>every*120+120;
   const scls=!d.sync_all_on||sy.result=="paused"?"warn":stale?"bad":(sy.result=="ok"||sy.result=="idle")?"ok":"warn";
   const sx=`<div class="card"><h2><span class="dot ${scls}"></span>PC sync (${esc(sy.host||"MPS-DINO2023")})</h2>

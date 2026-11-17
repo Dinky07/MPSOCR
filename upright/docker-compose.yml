@@ -1,0 +1,30 @@
+# /srv/ocr/pipeline/upright/docker-compose.yml  (project mps-upright; separate from /srv/ocr/docker-compose.yml)
+# Page orientation service pinned to the RTX 2070 Super by UUID (nvidia-smi numbers it 0, Ollama numbers it 1).
+# Scans are mounted read-only: the service only answers "which way up is this page"; it never changes a file.
+name: mps-upright
+services:
+  upright:
+    build: .
+    image: mps-upright:1
+    container_name: mps-upright
+    restart: unless-stopped
+    user: "1000:1000"
+    mem_limit: 3g
+    ports:
+      - "127.0.0.1:8091:8091"
+    environment:
+      - HOME=/models
+      - PADDLE_PDX_CACHE_HOME=/models/paddlex
+      - UPRIGHT_DEVICE=gpu:0
+      - UPRIGHT_SIGN=1
+    volumes:
+      - /srv/ocr/scans:/scans:ro
+      - /srv/ocr/upright-data/models:/models
+      - /srv/ocr/scans/pipeline/work/upright:/work
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["GPU-46bda22a-c253-bf5b-8b29-f88f8cfd6fde"]
+              capabilities: [gpu]
