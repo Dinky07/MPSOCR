@@ -21,7 +21,7 @@
         "recursive": true,
         "pattern": "*",
         "only_newer_than": "2026-10-21",
-        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Supplier Docs MPS/imported/DeliveryNotes"
+        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Imported/DeliveryNotes"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/Release Notes",
@@ -29,7 +29,7 @@
         "recursive": true,
         "pattern": "*",
         "only_newer_than": "2026-10-01",
-        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Supplier Docs MPS/imported/ReleaseNotes"
+        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Imported/ReleaseNotes"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/JTs Ronin",
@@ -37,7 +37,7 @@
         "recursive": false,
         "pattern": "*.pdf",
         "only_newer_than": "2026-10-17",
-        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Supplier Docs MPS/imported/RoninJobTransfers"
+        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Imported/RoninJobTransfers"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/MPS Orders",
@@ -45,7 +45,7 @@
         "recursive": false,
         "pattern": "*.pdf",
         "only_newer_than": "2026-10-09",
-        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Supplier Docs MPS/imported/CustomerOrders"
+        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Imported/CustomerOrders"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts",
@@ -53,7 +53,7 @@
         "recursive": false,
         "pattern": "*.pdf",
         "only_newer_than": "2026-11-03",
-        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Supplier Docs MPS/imported/TestCerts"
+        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Imported/TestCerts"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Fittings",
@@ -61,7 +61,7 @@
         "recursive": false,
         "pattern": "*.pdf",
         "only_newer_than": "2026-11-03",
-        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Supplier Docs MPS/imported/TestCerts"
+        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Imported/TestCerts"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Flanges",
@@ -69,7 +69,7 @@
         "recursive": false,
         "pattern": "*.pdf",
         "only_newer_than": "2026-11-03",
-        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Supplier Docs MPS/imported/TestCerts"
+        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Imported/TestCerts"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Pipe",
@@ -77,7 +77,7 @@
         "recursive": false,
         "pattern": "*.pdf",
         "only_newer_than": "2026-11-03",
-        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Supplier Docs MPS/imported/TestCerts"
+        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Imported/TestCerts"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/JTs MPS",
@@ -86,7 +86,7 @@
         "pattern": "*.pdf",
         "only_newer_than": "2026-10-19",
         "_note": "Dino 5 Nov 2026: MPS JTs scanned to Chronoscan\\JTs MPS (imported\\ was uploaded by Chronoscan up to 19 Oct)",
-        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Supplier Docs MPS/imported/JobTransfers"
+        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Imported/JobTransfers"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/Supplier Docs MPS",
@@ -94,7 +94,7 @@
         "recursive": false,
         "pattern": "*",
         "only_newer_than": "2026-11-01",
-        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Supplier Docs MPS/imported/SupplierInvoices",
+        "move_after_import": "/mnt/nas-scans/ScanToFile/Chronoscan/Imported/SupplierInvoices",
         "_note": "Dino 18 Nov 2026: MPS supplier invoices are scanned to Chronoscan\\Supplier Docs MPS; once read OK they are moved to its imported\\ folder (needs this folder mounted read-write)"
       }
     ]

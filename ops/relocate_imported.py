@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 r"""
 One-off (Dino 18 Nov 2026): move the scans the collector already moved into each Chronoscan folder's own imported\
-into the shared folder each source's "move_after_import" now names (Supplier Docs MPS\imported\<Type>).
+(or into Supplier Docs MPS\imported\<Type>, the first shared place) into the folder each source's
+"move_after_import" now names (Chronoscan\Imported\<Type>, Dino 18 Nov 17:03).
 
 Only files the collector itself moved are touched: the state DB's nas_seen rows with status 'imported'. Anything
 else in an imported\ folder (for example what Chronoscan's own upload left in JTs MPS\imported before 19 Oct) stays.
@@ -32,15 +33,16 @@ for src in cfg.get("collector", {}).get("sources", []):
     to = src.get("move_after_import")
     if not to or not Path(to).is_absolute():
         continue
-    base, old, new = Path(src["path"]), Path(src["path"]) / "imported", Path(to)
-    if old == new:
-        continue
+    base, new = Path(src["path"]), Path(to)
+    olds = [base / "imported", base.parent / "Supplier Docs MPS" / "imported" / src["type_folder"]]
+    olds = [o for o in olds if o != new]
     rows = db.execute("SELECT path, size, mtime, sha256 FROM nas_seen WHERE type_folder=? AND status='imported'",
                       (src["type_folder"],)).fetchall()
     for path, size, mtime, digest in rows:
         p = Path(path)
-        if old not in p.parents or p.parent == new or new in p.parents:
-            continue                       # not in the old folder, or already in the new one
+        old = max((o for o in olds if o in p.parents), key=lambda o: len(o.parts), default=None)   # deepest match
+        if old is None or p.parent == new or new in p.parents:
+            continue                       # not in an old folder, or already in the new one
         if not p.exists():
             print(f"gone, skipped: {p}")
             skipped += 1
@@ -68,9 +70,10 @@ for src in cfg.get("collector", {}).get("sources", []):
         db.commit()
         moved += 1
     if apply:
-        try:
-            old.rmdir()                    # only if now empty; never removes anything else
-            print(f"removed empty folder {old}")
-        except OSError:
-            pass
+        for old in sorted(olds, key=lambda o: -len(o.parts)):     # deepest first, so a parent can empty too
+            try:
+                old.rmdir()                # only if now empty; never removes anything else
+                print(f"removed empty folder {old}")
+            except OSError:
+                pass
 print(f"{moved} {'moved' if apply else 'would be moved (dry run: add --apply)'}, {skipped} skipped")
