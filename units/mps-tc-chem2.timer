@@ -1,8 +1,0 @@
-[Unit]
-Description=MPS one-off: test-cert reader test, Wed 11 Nov 2026 10:00 (waits for training and the queue to finish)
-[Timer]
-OnCalendar=2026-11-11 10:00:00
-Persistent=false
-Unit=mps-tc-chem2.service
-[Install]
-WantedBy=timers.target
