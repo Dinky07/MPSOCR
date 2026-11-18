@@ -20,56 +20,64 @@
         "type_folder": "DeliveryNotes",
         "recursive": true,
         "pattern": "*",
-        "only_newer_than": "2026-10-21"
+        "only_newer_than": "2026-10-21",
+        "move_after_import": "imported"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/Release Notes",
         "type_folder": "ReleaseNotes",
         "recursive": true,
         "pattern": "*",
-        "only_newer_than": "2026-10-01"
+        "only_newer_than": "2026-10-01",
+        "move_after_import": "imported"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/JTs Ronin",
         "type_folder": "RoninJobTransfers",
         "recursive": false,
         "pattern": "*.pdf",
-        "only_newer_than": "2026-10-17"
+        "only_newer_than": "2026-10-17",
+        "move_after_import": "imported"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/MPS Orders",
         "type_folder": "CustomerOrders",
         "recursive": false,
         "pattern": "*.pdf",
-        "only_newer_than": "2026-10-09"
+        "only_newer_than": "2026-10-09",
+        "move_after_import": "imported"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts",
         "type_folder": "TestCerts",
         "recursive": false,
         "pattern": "*.pdf",
-        "only_newer_than": "2026-11-03"
+        "only_newer_than": "2026-11-03",
+        "move_after_import": "imported"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Fittings",
         "type_folder": "TestCerts",
         "recursive": false,
         "pattern": "*.pdf",
-        "only_newer_than": "2026-11-03"
+        "only_newer_than": "2026-11-03",
+        "move_after_import": "imported"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Flanges",
         "type_folder": "TestCerts",
         "recursive": false,
         "pattern": "*.pdf",
-        "only_newer_than": "2026-11-03"
+        "only_newer_than": "2026-11-03",
+        "move_after_import": "imported"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/TestCerts/Pipe",
         "type_folder": "TestCerts",
         "recursive": false,
         "pattern": "*.pdf",
-        "only_newer_than": "2026-11-03"
+        "only_newer_than": "2026-11-03",
+        "move_after_import": "imported"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/JTs MPS",
@@ -77,7 +85,8 @@
         "recursive": false,
         "pattern": "*.pdf",
         "only_newer_than": "2026-10-19",
-        "_note": "Dino 5 Nov 2026: MPS JTs scanned to Chronoscan\\JTs MPS (imported\\ was uploaded by Chronoscan up to 19 Oct)"
+        "_note": "Dino 5 Nov 2026: MPS JTs scanned to Chronoscan\\JTs MPS (imported\\ was uploaded by Chronoscan up to 19 Oct)",
+        "move_after_import": "imported"
       },
       {
         "path": "/mnt/nas-scans/ScanToFile/Chronoscan/Supplier Docs MPS",
