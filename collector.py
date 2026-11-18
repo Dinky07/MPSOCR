@@ -25,7 +25,7 @@ where the collector writes to the NAS, so that source's mount must be read-write
 - "move_dry_run": true logs what would move and moves nothing
 The target folder is never scanned (it is skipped even when the source is recursive).
 """
-import fnmatch, hashlib, json, logging, os, shutil, signal, sqlite3, sys, time
+import errno, fnmatch, hashlib, json, logging, os, shutil, signal, sqlite3, sys, time
 from datetime import datetime
 from pathlib import Path
 
@@ -161,7 +161,10 @@ class Collector:
         rows = self.db.execute(
             "SELECT path, size, mtime, sha256, status FROM nas_seen WHERE type_folder=? AND status IN ('queued','duplicate')",
             (src["type_folder"],)).fetchall()
-        rows = [r for r in rows if base in Path(r[0]).parents]      # this source's files only
+        recursive = src.get("recursive", True)
+        # this source's files only: a non-recursive source owns only the files directly in its folder (TestCerts
+        # and TestCerts/Fittings are separate sources), a recursive one everything below it
+        rows = [r for r in rows if (base in Path(r[0]).parents if recursive else Path(r[0]).parent == base)]
         moved = waiting = 0
         for path, size, mtime, digest, status in rows:
             if _stop:
@@ -183,19 +186,23 @@ class Collector:
                 continue
             if (st.st_size, st.st_mtime) != (size, mtime):
                 continue                         # changed since it was imported: a new file, the scan loop handles it
-            dst = target / p.name
+            # a recursive source keeps its sub-folders under the imported folder (imported/<sub>/name)
+            dst_dir = target / p.parent.relative_to(base) if recursive else target
+            dst = dst_dir / p.name
             n = 2
             while dst.exists():
-                dst = target / f"{p.stem}_{n}{p.suffix}"
+                dst = dst_dir / f"{p.stem}_{n}{p.suffix}"
                 n += 1
             if dry:
                 log.info("move (dry run, nothing moved): %s -> %s", p, dst)
                 continue
             try:
-                target.mkdir(parents=True, exist_ok=True)
+                dst_dir.mkdir(parents=True, exist_ok=True)
                 os.rename(p, dst)                # a plain rename on the same share; never copy + delete
             except OSError as e:
                 log.warning("move after import failed, file left in place: %s -> %s: %s", p, dst, e)
+                if e.errno in (errno.EROFS, errno.EACCES, errno.EPERM):
+                    break                        # folder not writable (read-only mount / NAS rights): one warning a poll
                 continue
             self.record(p, size, mtime, digest, "moved", src["type_folder"])
             self.record(dst, size, mtime, digest, "imported", src["type_folder"])
