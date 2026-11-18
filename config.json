@@ -78,6 +78,14 @@
         "pattern": "*.pdf",
         "only_newer_than": "2026-10-19",
         "_note": "Dino 5 Nov 2026: MPS JTs scanned to Chronoscan\\JTs MPS (imported\\ was uploaded by Chronoscan up to 19 Oct)"
+      },
+      {
+        "path": "/mnt/nas-scans/ScanToFile/Chronoscan/Supplier Docs MPS",
+        "type_folder": "SupplierInvoices",
+        "recursive": false,
+        "pattern": "*",
+        "move_after_import": "imported",
+        "_note": "Dino 18 Nov 2026: MPS supplier invoices are scanned to Chronoscan\\Supplier Docs MPS; once read OK they are moved to its imported\\ folder (needs this folder mounted read-write)"
       }
     ]
   },

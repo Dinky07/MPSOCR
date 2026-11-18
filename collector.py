@@ -13,6 +13,17 @@ Duplicates are prevented entirely on this box, in the same SQLite state DB the w
 
 Only files newer than a source's "only_newer_than" date are queued, so turning this on doesn't
 re-process the archive. Files are only copied once their size has stopped changing (scanner finished).
+
+Optional per source, "move_after_import": "imported" (a folder name under the source, or an absolute path).
+Once the worker has processed a file OK (state DB `processed` row with status ok for its SHA-256), the NAS
+file is MOVED into that folder, so the scan folder only shows what is still waiting. This is the one case
+where the collector writes to the NAS, so that source's mount must be read-write. Rules:
+- only after a successful import: queued-but-not-yet-read, failed and before-cutoff files stay where they are
+- a file is moved only if it is still the exact file that was imported (same size and modified time)
+- never deleted, never overwritten: a name already in the target folder gets _2, _3 ...; a move that can't be
+  a plain rename (e.g. a different mount) is skipped with a warning rather than copied and removed
+- "move_dry_run": true logs what would move and moves nothing
+The target folder is never scanned (it is skipped even when the source is recursive).
 """
 import fnmatch, hashlib, json, logging, os, shutil, signal, sqlite3, sys, time
 from datetime import datetime
@@ -65,11 +76,23 @@ class Collector:
             return "queued"
         return None
 
+    @staticmethod
+    def imported_dir(src):
+        """The folder imported files are moved to, or None when the source doesn't move files."""
+        to = src.get("move_after_import")
+        if not to:
+            return None
+        to = Path(to)
+        return to if to.is_absolute() else Path(src["path"]) / to
+
     def files(self, src):
         base = Path(src["path"])
         pattern = src.get("pattern", "*")
+        skip = self.imported_dir(src)
         walker = base.rglob("*") if src.get("recursive", True) else base.glob("*")
         for p in walker:
+            if skip and (p.parent == skip or skip in p.parents):
+                continue
             if p.is_file() and p.suffix.lower() in ACCEPT and fnmatch.fnmatch(p.name.lower(), pattern.lower()) \
                     and not p.name.startswith(("~$", ".")):
                 yield p
@@ -127,6 +150,59 @@ class Collector:
             queued += 1
         return "ok", queued
 
+    def move_imported(self, src):
+        """Move this source's files that the worker has processed OK into the source's imported folder.
+        Returns (moved, waiting): files moved now, and files still waiting for the worker (or failed)."""
+        target = self.imported_dir(src)
+        if not target:
+            return 0, 0
+        dry = bool(src.get("move_dry_run"))
+        base = Path(src["path"])
+        rows = self.db.execute(
+            "SELECT path, size, mtime, sha256, status FROM nas_seen WHERE type_folder=? AND status IN ('queued','duplicate')",
+            (src["type_folder"],)).fetchall()
+        rows = [r for r in rows if base in Path(r[0]).parents]      # this source's files only
+        moved = waiting = 0
+        for path, size, mtime, digest, status in rows:
+            if _stop:
+                break
+            p = Path(path)
+            if p.parent == target or target in p.parents:
+                continue
+            if not digest or not self.db.execute(
+                    "SELECT 1 FROM processed WHERE sha256=? AND status='ok'", (digest,)).fetchone():
+                waiting += 1                     # not read yet, or the read failed: leave it on the NAS as it is
+                continue
+            try:
+                st = p.stat()
+            except FileNotFoundError:            # someone already moved or removed it
+                self.record(p, size, mtime, digest, "gone", src["type_folder"])
+                continue
+            except OSError as e:
+                log.warning("can't check %s for the move: %s", p, e)
+                continue
+            if (st.st_size, st.st_mtime) != (size, mtime):
+                continue                         # changed since it was imported: a new file, the scan loop handles it
+            dst = target / p.name
+            n = 2
+            while dst.exists():
+                dst = target / f"{p.stem}_{n}{p.suffix}"
+                n += 1
+            if dry:
+                log.info("move (dry run, nothing moved): %s -> %s", p, dst)
+                continue
+            try:
+                target.mkdir(parents=True, exist_ok=True)
+                os.rename(p, dst)                # a plain rename on the same share; never copy + delete
+            except OSError as e:
+                log.warning("move after import failed, file left in place: %s -> %s: %s", p, dst, e)
+                continue
+            self.record(p, size, mtime, digest, "moved", src["type_folder"])
+            self.record(dst, size, mtime, digest, "imported", src["type_folder"])
+            log.info("moved after import: %s -> %s", p, dst)
+            moved += 1
+        return moved, waiting
+
     def write_status(self, per_source):
         st = {"updated_at": datetime.now().astimezone().isoformat(timespec="seconds"), "pid": os.getpid(),
               "sources": per_source}
@@ -150,6 +226,7 @@ class Collector:
                 key = src["type_folder"]
                 prev = per_source.get(key, {})
                 info = {"path": src["path"], "state": "ok", "last_scan": prev.get("last_scan"),
+                        "moved_total": prev.get("moved_total", 0),
                         "last_queued_at": prev.get("last_queued_at"), "queued_total": prev.get("queued_total", 0)}
                 # dashboard switches: flags/collect_off stops all, flags/collect_off_<Type> stops one type
                 if (flags / "collect_off").exists() or (flags / f"collect_off_{key}").exists():
@@ -163,6 +240,12 @@ class Collector:
                     if n:
                         info["last_queued_at"] = info["last_scan"]
                         info["queued_total"] += n
+                    if state == "ok" and self.imported_dir(src):
+                        moved, waiting = self.move_imported(src)
+                        info["moved_total"] = prev.get("moved_total", 0) + moved
+                        info["waiting_for_import"] = waiting
+                        if src.get("move_dry_run"):
+                            info["move_dry_run"] = True
                 except OSError as e:               # NAS dropped mid-scan: try again next poll
                     log.warning("scan of %s interrupted: %s", src["path"], e)
                     info["state"] = f"error: {e}"[:200]
