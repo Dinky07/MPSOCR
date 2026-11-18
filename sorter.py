@@ -17,7 +17,8 @@ delivery_note (MPS's own, barcode), supplier_delivery_note, job_transfer, worksh
     sorter.py classify FILE.pdf                                             (try one file)
 Writes work/sorter/shadow.jsonl (every verdict, cumulative) and reports/sorter shadow <day>.csv/.json.
 """
-import argparse, base64, collections, csv, glob, json, os, random, re, subprocess, sys, tempfile, time, urllib.request
+import argparse, base64, collections, csv, glob, json, os, random, re, subprocess, sys, tempfile, time
+import model_call                      # every Ollama request goes through here
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -128,7 +129,7 @@ def other_model_loaded():
     """The name of another model Ollama holds (the test-certificate reader's qwen3-vl), or None. Asking for qwen2.5vl
     while it is loaded would make Ollama swap models back and forth with the worker."""
     try:
-        ms = json.load(urllib.request.urlopen(f"{OLLAMA}/api/ps", timeout=10)).get("models") or []
+        ms = model_call.loaded(OLLAMA, timeout=10) or []
         return next((m["name"] for m in ms if m.get("name") != MODEL), None)
     except Exception:
         return None
@@ -149,9 +150,9 @@ def vlm(pdf, td):
         prompt = ("What kind of business document is this page? It was scanned at Mining Pressure Systems (MPS), a South "
                   "African pipe and pressure-equipment company. Choose exactly one type:\n" + lst +
                   '\nAnswer only JSON: {"type": "<one of the types>", "confidence": <0 to 1>}')
-        body = json.dumps({"model": MODEL, "prompt": prompt, "images": [img], "stream": False, "format": "json",
-                           "keep_alive": "30m", "options": {"num_ctx": NUM_CTX, "temperature": 0}}).encode()
-        r = json.load(urllib.request.urlopen(urllib.request.Request(f"{OLLAMA}/api/generate", body, {"Content-Type": "application/json"}), timeout=300))
+        body = {"model": MODEL, "prompt": prompt, "images": [img], "stream": False, "format": "json",
+                "keep_alive": "30m", "options": {"num_ctx": NUM_CTX, "temperature": 0}}
+        r = model_call.generate(OLLAMA, body, 300)
         a = json.loads(r.get("response") or "{}")
         ty = str(a.get("type") or "").strip().lower()
         return (ty if ty in TYPES else None), float(a.get("confidence") or 0), round(time.time() - t0, 1)

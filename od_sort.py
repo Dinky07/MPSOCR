@@ -15,7 +15,8 @@ values + Tesseract on the first two pages (cached in work/od_text by file hash).
 The review sheet (reports/Other Documents review <stamp>.xlsx) lists every match with the rule, the words that
 matched, the summary and a link to the PDF; Move is pre-filled Y. Nothing moves until `apply`.
 """
-import argparse, base64, glob, hashlib, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.request
+import argparse, base64, glob, hashlib, json, os, re, shutil, subprocess, sys, tempfile, time
+import model_call                      # every Ollama request goes through here
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -119,10 +120,7 @@ def summarise(pdf, text, cfg):
                 "messages": [{"role": "system", "content": SUM_PROMPT},
                              {"role": "user", "content": "Summarise this document.\n\nOCR text (hint):\n" + (text or "")[:3000],
                               "images": [base64.b64encode(open(png, "rb").read()).decode()]}]}
-        req = urllib.request.Request(cfg["ollama_url"].rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=600) as r:
-            raw = json.loads(r.read())["message"]["content"]
+        raw = model_call.chat_content(cfg["ollama_url"], body, 600)
     m = re.search(r"\{.*\}", raw, re.S)
     d = json.loads(m.group(0) if m else raw)
     out = {k: (str(d.get(k)).strip() if d.get(k) not in (None, "", "null") else None)

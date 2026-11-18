@@ -17,7 +17,8 @@ How a file is read (page by page):
     python3 tc_reader.py CERT.pdf [--family Pipe] [--ollama URL] [--model qwen2.5vl:7b] [--max-pages 30] [--json]
 Standard library + poppler (pdfinfo, pdftotext, pdftoppm). po_reader.parse_answer is used when it is beside this file.
 """
-import argparse, base64, glob, json, os, re, shutil, subprocess, sys, tempfile, urllib.request
+import argparse, base64, glob, json, os, re, shutil, subprocess, sys, tempfile
+import model_call                      # every Ollama request goes through here
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -582,10 +583,7 @@ def _read_page_once(path, page, ollama_url, model, fewshot_dir, family=None, px=
                 "options": {"temperature": 0, "num_ctx": num_ctx, "num_predict": NUM_PREDICT},
                 "messages": [{"role": "system", "content": system or PROMPT}] + fewshot_msgs(fewshot_dir, family)
                             + [{"role": "user", "content": prompt, "images": [base64.b64encode(open(png, "rb").read()).decode()]}]}
-        req = urllib.request.Request(ollama_url.rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = json.loads(r.read())["message"]["content"]
+        raw = model_call.chat_content(ollama_url, body, timeout)
     a = parse_answer(raw)
     if turned and isinstance(a, dict):
         a["turned_upright"] = turned

@@ -24,6 +24,7 @@ from pathlib import Path
 
 import cpu_invoice
 import sidecar_lock                       # one lock per sidecar for every writer (review F10, 28 Oct)
+import model_call                         # every Ollama request goes through here
 import mps_jobs                           # job numbers, allocations, scan-date checks: one rule for every reader
 try:
     import jt_copy                        # 751 (17 Nov 2026): white / yellow / blue / pink copy of the carbon JT
@@ -441,8 +442,7 @@ def normalise(doc_type, raw, cfg, own_vat=()):
 # --------------------------------------------------------------------------- extraction
 def ollama_up(cfg):
     try:
-        with urllib.request.urlopen(cfg["ollama_url"].rstrip("/") + "/api/tags", timeout=5):
-            return True
+        return model_call.is_up(cfg["ollama_url"], timeout=5)
     except Exception:
         return False
 
@@ -450,8 +450,7 @@ def ollama_up(cfg):
 def ollama_loaded(cfg):
     """Names of the models Ollama has in memory right now (empty when it is down)."""
     try:
-        with urllib.request.urlopen(cfg["ollama_url"].rstrip("/") + "/api/ps", timeout=5) as r:
-            return [m.get("name") for m in json.load(r).get("models", [])]
+        return [m.get("name") for m in model_call.loaded(cfg["ollama_url"], timeout=5)]
     except Exception:
         return []
 
@@ -506,11 +505,8 @@ def extract_builtin(doc_type, path, cfg, tcfg, hint=None, _small=False):
             "keep_alive": cfg.get("keep_alive", "15m"),
             "options": {"temperature": 0, "num_ctx": int(cfg.get("num_ctx", 16384)), "num_predict": answer_cap(len(images), cfg)},
         }
-        req = urllib.request.Request(cfg["ollama_url"].rstrip("/") + "/api/chat",
-                                     data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=int(cfg.get("ollama_timeout", 900))) as r:
-                resp = json.load(r)
+            resp = model_call.chat(cfg["ollama_url"], body, timeout=int(cfg.get("ollama_timeout", 900)))
         except urllib.error.HTTPError as e:
             if e.code == 400 and not _small:
                 log.warning("Ollama rejected %s (HTTP 400); retrying with first page at lower resolution", path.name)
@@ -522,9 +518,7 @@ def extract_builtin(doc_type, path, cfg, tcfg, hint=None, _small=False):
             if not ollama_up(cfg):
                 raise OllamaDown(str(e))
             raise
-        if resp.get("done_reason") == "length":          # 684
-            raise RuntimeError(f"answer stopped at the {body['options']['num_predict']}-token cap "
-                               f"({round((resp.get('eval_duration') or 0) / 1e9)} s): the model was repeating itself on this page")
+        model_call.check_length(resp, body["options"]["num_predict"])          # 684
         content = resp.get("message", {}).get("content", "")
         try:
             return json.loads(content), len(images)

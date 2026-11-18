@@ -18,6 +18,7 @@ Standard library only.
 """
 import argparse, getpass, hashlib, hmac, json, os, re, secrets, shutil, sqlite3, subprocess, sys, threading, time
 import urllib.request
+import model_call                      # every Ollama request goes through here
 from datetime import datetime, date
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -127,12 +128,10 @@ def ollama_state(cfg):
     base = cfg.get("ollama_url", "http://127.0.0.1:11434").rstrip("/")
     st = {"up": False, "loaded": [], "version": None}
     try:
-        with urllib.request.urlopen(base + "/api/version", timeout=3) as r:
-            st["version"] = json.load(r).get("version")
+        st["version"] = model_call.version(base, timeout=3)
         st["up"] = True
-        with urllib.request.urlopen(base + "/api/ps", timeout=3) as r:
-            st["loaded"] = [{"name": m.get("name"), "vram_mb": round(m.get("size_vram", 0) / 2**20),
-                             "until": m.get("expires_at")} for m in json.load(r).get("models", [])]
+        st["loaded"] = [{"name": m.get("name"), "vram_mb": round(m.get("size_vram", 0) / 2**20),
+                         "until": m.get("expires_at")} for m in model_call.loaded(base, timeout=3)]
     except Exception as e:
         st["error"] = str(e)[:150]
     return st
@@ -1624,9 +1623,8 @@ def training_schedule(cfg):
             runner.append({"name": f.stem, "state": "running" if running else "queued", "about": about[:140], "since": since})
     loaded = []
     try:
-        with urllib.request.urlopen(cfg["ollama_url"].rstrip("/") + "/api/ps", timeout=3) as r:
-            loaded = [{"name": m.get("name"), "vram_gb": round((m.get("size_vram") or 0) / 1e9, 1), "until": m.get("expires_at")}
-                      for m in json.loads(r.read()).get("models", [])]
+        loaded = [{"name": m.get("name"), "vram_gb": round((m.get("size_vram") or 0) / 1e9, 1), "until": m.get("expires_at")}
+                  for m in model_call.loaded(cfg["ollama_url"], timeout=3)]
     except Exception:
         loaded = None
     data = {"timers": timers, "runner": runner, "ollama": loaded,

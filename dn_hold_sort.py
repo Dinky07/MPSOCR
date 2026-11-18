@@ -16,7 +16,8 @@ Sage supplier list decide who issued it. DRY RUN unless --apply; reports/dn hold
 --from-report: only documents whose sorting (kind, supplier, our delivery note) is the same as in the dry-run report Dino
 checked are moved; any that come out differently stay on hold and are listed.
 """
-import argparse, base64, csv, difflib, glob, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.request
+import argparse, base64, csv, difflib, glob, json, os, re, shutil, subprocess, sys, tempfile, time
+import model_call                      # every Ollama request goes through here
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -105,8 +106,7 @@ def model_read(pdf):
         body = {"model": MODEL, "stream": False, "format": "json", "keep_alive": CFG.get("keep_alive", "15m"),
                 "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": 1500},
                 "messages": [{"role": "user", "content": PROMPT, "images": [base64.b64encode(open(f"{td}/p.png", "rb").read()).decode()]}]}
-        req = urllib.request.Request(OLLAMA + "/api/chat", json.dumps(body).encode(), {"Content-Type": "application/json"})
-        raw = json.loads(urllib.request.urlopen(req, timeout=600).read())["message"]["content"]
+        raw = model_call.chat_content(OLLAMA, body, 600)
     try:
         return json.loads(raw)
     except ValueError:

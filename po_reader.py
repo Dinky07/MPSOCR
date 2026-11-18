@@ -10,7 +10,8 @@ the same post-processing (tidy) as the run that read the 2017-2026 archive, so r
   - Worked examples: <fewshot_dir>/<name>.png + <name>.json, shown to the model before each page.
 Generated from po_ocr_v2.py; edit the prompt there and regenerate, or here if the training folder is retired.
 """
-import base64, glob, json, os, re, subprocess, tempfile, urllib.request
+import base64, glob, json, os, re, subprocess, tempfile
+import model_call                      # every Ollama request goes through here
 
 OWN = re.compile('MINING PRESSURE|^MPS\\b|POLYMER LINERS|^POLYMER$|KUSASA|RONIN FLANGES|ALOE ?CAP|JUMBO PRESS|BEARDSLEY', re.I)
 
@@ -534,11 +535,8 @@ def read(path, ollama_url, model="qwen2.5vl:7b", fewshot_dir=None, pages=2, px=1
                 "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": NUM_PREDICT},
                 "messages": fewshot_msgs(fewshot_dir) + [{"role": "user", "content": PROMPT,
                             "images": [base64.b64encode(open(x, "rb").read()).decode() for x in pngs]}]}
-        req = urllib.request.Request(ollama_url.rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            resp = json.loads(r.read())
-            raw = resp["message"]["content"]
+        resp = model_call.chat(ollama_url, body, timeout)
+        raw = resp["message"]["content"]
     global LAST_TIMING                               # review F22 (28 Oct): is the worked-example prefix cached between reads?
     LAST_TIMING = {"prompt_tokens": resp.get("prompt_eval_count"), "prompt_eval_ms": round((resp.get("prompt_eval_duration") or 0) / 1e6),
                    "eval_tokens": resp.get("eval_count"), "eval_ms": round((resp.get("eval_duration") or 0) / 1e6),

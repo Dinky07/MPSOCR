@@ -18,7 +18,8 @@ Everything lives in <pipeline root>/training/:
   job.json, logs/, reports/   the running / last job, its log, and the A/B score of every job
 The dashboard's Training tab drives all of this.
 """
-import argparse, difflib, hashlib, json, os, re, shutil, signal, subprocess, sys, time, urllib.request
+import argparse, difflib, hashlib, json, os, re, shutil, signal, subprocess, sys, time
+import model_call                      # every Ollama request goes through here
 from datetime import datetime
 from pathlib import Path
 
@@ -761,12 +762,9 @@ def unload_ollama(cfg, job):
     """Free the GPU: ask Ollama to unload every model it has loaded."""
     base = cfg["ollama_url"].rstrip("/")
     try:
-        with urllib.request.urlopen(base + "/api/ps", timeout=10) as r:
-            models = [m["name"] for m in json.load(r).get("models", [])]
+        models = [m["name"] for m in model_call.loaded(base, timeout=10)]
         for m in models:
-            req = urllib.request.Request(base + "/api/generate", data=json.dumps({"model": m, "keep_alive": 0}).encode(),
-                                         headers={"Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=60).read()
+            model_call.unload(base, m, timeout=60)
         job.log(f"unloaded from the GPU: {', '.join(models) or 'nothing loaded'}")
         time.sleep(5)
     except Exception as ex:
