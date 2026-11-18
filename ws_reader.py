@@ -17,7 +17,8 @@ How a page is read:
     python3 ws_reader.py SHEET.pdf [--ollama http://localhost:11434] [--model qwen2.5vl:7b] [--cpu-only] [--classify]
 Standard library + poppler (pdftoppm, pdftotext); tesseract for looks_like_ws on scans.
 """
-import argparse, base64, glob, json, os, re, subprocess, sys, tempfile, urllib.request
+import argparse, base64, glob, json, os, re, subprocess, sys, tempfile
+import model_call                      # every Ollama request goes through here
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -411,10 +412,7 @@ def read_model(path, ollama_url, model, fewshot_dir, px=1600, timeout=1200, keep
                 "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": NUM_PREDICT},
                 "messages": fewshot_msgs(fewshot_dir) + [{"role": "user", "content": prompt,
                                                           "images": [base64.b64encode(open(png, "rb").read()).decode()]}]}
-        req = urllib.request.Request(ollama_url.rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = json.loads(r.read())["message"]["content"]
+        raw = model_call.chat_content(ollama_url, body, timeout)
     return parse_answer(raw)
 
 

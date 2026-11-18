@@ -17,7 +17,8 @@ Design: Claude Cowork\\Customer Orders\\Customer Orders - OCR pipeline design.md
 analyse() works on OCR output only (texts + barcodes per page), so the rules can be tested away from the box.
 Lookups come from CSVs on the pipeline share: sage_customers.csv, sage_so_history.csv, jobs_sage.csv, jobfile_orders.csv.
 """
-import base64, csv, json, re, shutil, subprocess, tempfile, time, urllib.request
+import base64, csv, json, re, shutil, subprocess, tempfile, time
+import model_call                      # every Ollama request goes through here
 from collections import Counter, defaultdict
 from datetime import date
 from pathlib import Path
@@ -747,14 +748,9 @@ def gpu_read(up_pdf, texts, c, log=None):
                 "options": {"temperature": 0, "num_ctx": int(c["num_ctx"]),
                             "num_predict": max(int(c.get("answer_cap_min", 4000)), int(c.get("answer_cap_per_page", 3000)) * max(1, len(imgs)))},   # 684
                 "messages": [{"role": "user", "content": GPU_PROMPT + "\n\n" + hint, "images": imgs}]}
-        req = urllib.request.Request(c["ollama_url"].rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"})
         t0 = time.time()
-        with urllib.request.urlopen(req, timeout=int(c["ollama_timeout"])) as r:
-            resp = json.loads(r.read())
-        if resp.get("done_reason") == "length":          # 684: the model looped; fail now, not at the 15 min timeout
-            raise RuntimeError(f"answer stopped at the {body['options']['num_predict']}-token cap "
-                               f"({round((resp.get('eval_duration') or 0) / 1e9)} s): the model was repeating itself on this page")
+        resp = model_call.chat(c["ollama_url"], body, int(c["ollama_timeout"]))
+        model_call.check_length(resp, body["options"]["num_predict"])   # 684: the model looped; fail now, not at the 15 min timeout
         ans = json.loads(resp["message"]["content"])
         ans["_secs"] = round(time.time() - t0, 1)
         return ans

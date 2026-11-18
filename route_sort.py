@@ -16,7 +16,8 @@ Order forms the readers recognised (MPS A-number, Polymer PL-number, IGT) are ne
     python3 route_sort.py [--apply] [--only remove,quotes,other_documents,tag] [--no-synced]
 Dry run without --apply. Report: reports/route sort <stamp>[ dry run].csv / .json.
 """
-import argparse, base64, csv, glob, hashlib, json, os, re, shutil, subprocess, sys, tempfile, urllib.request
+import argparse, base64, csv, glob, hashlib, json, os, re, shutil, subprocess, sys, tempfile
+import model_call                      # every Ollama request goes through here
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -170,10 +171,7 @@ def ask_yes_no(pdf, question, cfg):
                 "options": {"temperature": 0, "num_ctx": cfg["num_ctx"], "num_predict": 5},
                 "messages": [{"role": "user", "content": question,
                               "images": [base64.b64encode(open(os.path.join(td, "p.png"), "rb").read()).decode()]}]}
-        req = urllib.request.Request(cfg["ollama_url"].rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=300) as r:
-            return json.loads(r.read())["message"]["content"].strip().lower().startswith("yes")
+        return model_call.chat_content(cfg["ollama_url"], body, 300).strip().lower().startswith("yes")
 
 
 QUOTE_PROMPT = """This is a sales quotation issued by Mining Pressure Systems or its HDPE division Kusasa Pressure Systems.
@@ -193,10 +191,7 @@ def read_quote(pdf, text, cfg, fname):
                 "messages": [{"role": "system", "content": QUOTE_PROMPT},
                              {"role": "user", "content": "Read this quotation.\n\nOCR text (hint):\n" + (text or "")[:3000],
                               "images": [base64.b64encode(open(os.path.join(td, "p.png"), "rb").read()).decode()]}]}
-        req = urllib.request.Request(cfg["ollama_url"].rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=600) as r:
-            raw = json.loads(r.read())["message"]["content"]
+        raw = model_call.chat_content(cfg["ollama_url"], body, 600)
     m = re.search(r"\{.*\}", raw, re.S)
     q = json.loads(m.group(0) if m else raw)
     ref = str(q.get("quote_number") or "").strip() or None

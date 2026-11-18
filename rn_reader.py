@@ -15,7 +15,8 @@ ONE document.
 
     python3 rn_reader.py <scan.pdf> [--out DIR]      # test: writes <stem>-NN.pdf + .json per release note, prints a summary
 """
-import argparse, base64, hashlib, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.request
+import argparse, base64, hashlib, json, os, re, shutil, subprocess, sys, tempfile, time
+import model_call                      # every Ollama request goes through here
 from datetime import date
 from pathlib import Path
 
@@ -209,10 +210,7 @@ def chat(c, png, system, ask, fmt=None, num_predict=4096):
                          {"role": "user", "content": ask, "images": [base64.b64encode(open(png, "rb").read()).decode()]}]}
     if fmt is not None:
         body["format"] = fmt
-    req = urllib.request.Request(c["ollama_url"].rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=int(c["timeout"])) as r:
-        return json.loads(r.read())["message"]["content"]
+    return model_call.chat_content(c["ollama_url"], body, int(c["timeout"]))
 
 
 def _json(raw):

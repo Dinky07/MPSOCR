@@ -14,7 +14,8 @@ the order number on the page's top strip, the marked line on the whole page (fie
 Checked, uploaded or locked documents are left alone. A kept copy already in SharePoint is updated in synced/ and
 listed in work/tc_copies/sp_refresh.txt for the PC sync.
     tc_copies.py [--apply] [--no-read]        (dry run unless --apply; --no-read: only copies whose marks are read)"""
-import argparse, base64, csv, glob, json, os, re, shutil, sys, tempfile, time, urllib.request
+import argparse, base64, csv, glob, json, os, re, shutil, sys, tempfile, time
+import model_call                      # every Ollama request goes through here
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -44,9 +45,7 @@ def ask(png, q):
     body = {"model": MODEL, "stream": False, "format": "json", "keep_alive": "15m",
             "options": {"temperature": 0, "num_ctx": 49152, "num_predict": 400},
             "messages": [{"role": "user", "content": q, "images": [base64.b64encode(open(png, "rb").read()).decode()]}]}
-    req = urllib.request.Request(CFG["ollama_url"].rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
-    return T.parse_answer(json.loads(urllib.request.urlopen(req, timeout=600).read())["message"]["content"]) or {}
+    return T.parse_answer(model_call.chat_content(CFG["ollama_url"], body, 600)) or {}
 
 
 def order_no(v):

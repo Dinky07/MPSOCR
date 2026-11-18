@@ -11,7 +11,8 @@ remarks, items[item_no, quantity, unit, description]) so normalise("jt") and the
 Worked examples: <fewshot_dir>/<name>.png + <name>.json (the JSON in the answer schema below). jt_fewshot/ is built
 from the review set by eval_jt.py --make-fewshot.
 """
-import base64, glob, json, os, re, subprocess, tempfile, urllib.request
+import base64, glob, json, os, re, subprocess, tempfile
+import model_call                      # every Ollama request goes through here
 
 PROMPT = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "jt_prompt.txt"), encoding="utf-8").read() \
     if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "jt_prompt.txt")) else None
@@ -133,10 +134,7 @@ def read(path, ollama_url, model="qwen2.5vl:7b", fewshot_dir=None, px=1600, time
             body = {"model": model, "stream": False, "format": ANSWER_SCHEMA, "keep_alive": keep_alive,
                     "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": NUM_PREDICT},
                     "messages": fewshot_msgs(examples, text) + [{"role": "user", "content": text, "images": [img]}]}
-            req = urllib.request.Request(ollama_url.rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
-                                         headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read())["message"]["content"]
+            return model_call.chat_content(ollama_url, body, timeout)
 
         raw = ask(fewshot_dir)
         try:

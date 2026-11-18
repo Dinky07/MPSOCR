@@ -215,13 +215,12 @@ def find_bw(pdf, out_png, page=1):
 
 def read_stamp(png, ollama_url, model, keep_alive="15m", timeout=600, num_ctx=49152, prompt=None):
     """The vision model on a cropped stamp: {is_ifc_stamp, date_blank, year_month_written, day_written, date_iso}."""
-    import base64, json, urllib.request
+    import base64, json
+    import model_call
     body = {"model": model, "stream": False, "format": "json", "keep_alive": keep_alive,
             "options": {"temperature": 0, "num_ctx": num_ctx, "num_predict": 200},
             "messages": [{"role": "user", "content": prompt or PROMPT, "images": [base64.b64encode(open(png, "rb").read()).decode()]}]}
-    req = urllib.request.Request(ollama_url.rstrip("/") + "/api/chat", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        raw = json.loads(r.read())["message"]["content"]
+    raw = model_call.chat_content(ollama_url, body, timeout)
     try:
         return json.loads(raw)
     except ValueError:
