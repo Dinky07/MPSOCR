@@ -1,4 +1,4 @@
-"""python3 -m unittest discover -s tests   (no GPU or Ollama needed)"""
+"""python3 -m unittest discover -s tests -t .   (from the pipeline folder)   (no GPU or Ollama needed)"""
 import os
 import sys
 import tempfile
