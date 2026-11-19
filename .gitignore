@@ -13,3 +13,5 @@ jt_fewshot/*.png
 training/
 *.csv
 *.log
+dashboard_password.hash
+.pytest_cache/

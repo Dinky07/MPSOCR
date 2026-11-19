@@ -75,6 +75,22 @@ def check_password(pw, stored):
         return False
 
 
+def password_file():
+    """The dashboard password's hash lives beside config.json in dashboard_password.hash (git-ignored), not in
+    config.json, which is in the repository. A hash still in config.json is used until --set-password is run."""
+    return CONFIG_PATH.with_name("dashboard_password.hash")
+
+
+def stored_password(cfg):
+    try:
+        h = password_file().read_text(encoding="utf-8").strip()
+        if h:
+            return h
+    except OSError:
+        pass
+    return cfg.get("dashboard", {}).get("password_hash", "")
+
+
 def set_password():
     cfg = load_cfg()
     pw = getpass.getpass("New dashboard password: ")
@@ -82,11 +98,17 @@ def set_password():
         sys.exit("Use at least 10 characters.")
     if pw != getpass.getpass("Again: "):
         sys.exit("Passwords don't match.")
-    cfg.setdefault("dashboard", {})["password_hash"] = hash_password(pw)
-    tmp = CONFIG_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-    os.replace(tmp, CONFIG_PATH)
-    print("Password saved. Restart the dashboard: sudo systemctl restart mps-ocr-dashboard")
+    pf = password_file()
+    tmp = pf.with_name(pf.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(hash_password(pw) + "\n")
+    os.replace(tmp, pf)
+    if cfg.get("dashboard", {}).pop("password_hash", None) is not None:     # the old hash leaves config.json
+        tmp = CONFIG_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        os.replace(tmp, CONFIG_PATH)
+    print(f"Password saved in {pf.name} (not in config.json). Restart the dashboard: sudo systemctl restart mps-ocr-dashboard")
 
 
 # --------------------------------------------------------------------------- status gathering
@@ -398,6 +420,9 @@ def storage_state(cfg):
         rc, out, _ = run(["git", "-C", str(repo), "log", "-1", "--format=%h %ad %s", "--date=short"], 5)
         rc2, dirty, _ = run(["git", "-C", str(repo), "status", "--porcelain"], 5)
         st["deploy"] = {"last": out.strip()[:120], "dirty": bool(dirty.strip())}
+        rc3, lr, _ = run(["git", "-C", str(repo), "rev-list", "--left-right", "--count", "HEAD...github/main"], 5)
+        if rc3 == 0 and len(lr.split()) == 2:                 # as at the last fetch (commit.sh, hourly and after every runner script)
+            st["deploy"]["ahead"], st["deploy"]["behind"] = (int(x) for x in lr.split())
     return st
 
 
@@ -2395,7 +2420,7 @@ class Handler(BaseHTTPRequestHandler):
             if len(recent) >= 8:
                 return self.send(429, "Too many attempts. Try again in 10 minutes.", "text/plain")
             pw = parse_qs(self.body()).get("password", [""])[0]
-            stored = cfg.get("dashboard", {}).get("password_hash", "")
+            stored = stored_password(cfg)
             if stored and check_password(pw, stored):
                 tok, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
                 hours = float(cfg.get("dashboard", {}).get("session_hours", 12))
@@ -2724,7 +2749,7 @@ function render(d){
     ${arrs.length?arrs.map(a=>`<div class="small" style="margin-top:4px">RAID ${esc(a.level)} ${esc(a.dev)} (${esc(a.members.join(" + "))}): <b>${!a.healthy?"DEGRADED "+esc(a.up):"healthy"}</b>${a.sync?` · ${esc(a.sync.what)} ${a.sync.pct}% (${Math.round(a.sync.min)} min left)`:""}</div>`).join(""):`<div class="small muted">no RAID array</div>`}
     ${(so.smart||[]).map(x=>`<div class="small">${esc(x.dev)}: SMART ${x.health=="PASSED"?"ok":"<b>"+esc(x.health)+"</b>"}${x.temp?" · "+x.temp+"°C":""}${x.error?' <span class="muted">'+esc(x.error)+'</span>':""}</div>`).join("")}
     <div class="small" style="margin-top:4px">Backup to NAS: ${bk?`<b>${esc(bk.result)}</b> ${esc(ago(bkAge))}${bk.message?" · "+esc(bk.message):""}`:'<span class="muted">not set up</span>'}</div>
-    ${so.deploy?`<div class="small muted">Deployed: ${esc(so.deploy.last)}${so.deploy.dirty?" (uncommitted changes)":""}</div>`:""}</div>`;
+    ${so.deploy?`<div class="small muted">Deployed: ${esc(so.deploy.last)}${so.deploy.dirty?" (uncommitted changes)":""}${so.deploy.behind?` · <span style="color:var(--bad)" title="Merged on GitHub, not on the box yet: run ops/deploy.sh">${so.deploy.behind} merged on GitHub, not deployed</span>`:""}${so.deploy.ahead?` · ${so.deploy.ahead} not on GitHub yet`:""}</div>`:""}</div>`;
   const al=d.alerts||[];const ax=al.length?`<div class="card" style="grid-column:1/-1"><h2><span class="dot bad"></span>Alerts (${al.length})</h2>
     ${al.map(a=>`<div class="small" style="margin-top:6px"><b>${esc(a.unit)}</b> failed ${esc(a.at)} <button class="btn small" style="float:right" onclick="act({action:'clear_alert',flag:'${esc(a.flag)}'},'alert cleared')">Clear</button>
       <pre style="white-space:pre-wrap;margin:4px 0 0;font-size:12px;color:var(--bad)">${esc(a.text)}</pre></div>`).join("")}</div>`:"";
@@ -3382,7 +3407,7 @@ def main():
         return set_password()
     cfg = load_cfg()
     d = cfg.get("dashboard", {})
-    if not d.get("password_hash"):
+    if not stored_password(cfg):
         sys.exit("No dashboard password set. Run:  python3 dashboard.py --set-password")
     ensure_indexes(cfg)
     addr = (d.get("bind", "0.0.0.0"), int(d.get("port", 8090)))
