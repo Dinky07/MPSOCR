@@ -153,6 +153,7 @@
     "SupplierInvoices": {
       "doc_type": "supplier_invoice",
       "split_pages": false,
+      "split_invoices": true,
       "max_pages": 4,
       "command": null,
       "cpu_first": true,
@@ -174,6 +175,7 @@
     "SupplierInvoicesArchive": {
       "doc_type": "supplier_invoice",
       "split_pages": false,
+      "split_invoices": true,
       "max_pages": 4,
       "command": null,
       "cpu_first": true,

@@ -470,8 +470,9 @@ def validate(f, cfg):
     return reasons
 
 
-def extract(pdf, db_suppliers, parse_date, cfg, max_pages=4):
-    """Returns (fields, reasons, text, text_source). Empty reasons means accepted on CPU."""
-    text, source = get_text(pdf, max_pages, int(cfg.get("ocr_dpi", 300)), cfg.get("ocr_lang", "eng"))
+def extract(pdf, db_suppliers, parse_date, cfg, max_pages=4, text=None):
+    """Returns (fields, reasons, text, text_source). Empty reasons means accepted on CPU.
+    text: (text, source) already read from these pages (inv_split reads each page once), so no second OCR run."""
+    text, source = text or get_text(pdf, max_pages, int(cfg.get("ocr_dpi", 300)), cfg.get("ocr_lang", "eng"))
     f = parse(text, db_suppliers, parse_date, cfg.get("own_vat_numbers", []))
     return f, validate(f, cfg), text, source
