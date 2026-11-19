@@ -16,7 +16,7 @@ here needs root except start/stop, which goes through a narrow sudoers rule inst
 Set or change the password:   python3 /srv/ocr/pipeline/dashboard.py --set-password
 Standard library only.
 """
-import argparse, getpass, hashlib, hmac, json, os, re, secrets, shutil, sqlite3, subprocess, sys, threading, time
+import argparse, getpass, gzip, hashlib, hmac, json, os, re, secrets, shutil, sqlite3, subprocess, sys, threading, time
 import urllib.request
 import model_call                      # every Ollama request goes through here
 from datetime import datetime, date, timedelta
@@ -151,6 +151,76 @@ def cached(key, ttl, fn, *args):
     return v
 
 
+_DIRC = {}
+
+
+def dir_cached(key, d, ttl, fn, *args):
+    """fn(*args) about directory d, recomputed when d's entries change (its mtime) or after ttl seconds (Dino 19 Nov:
+    the 5 s Overview refresh was listing and stat-ing every out/ and synced/ folder, thousands of files each time)."""
+    try:
+        m = os.stat(d).st_mtime_ns
+    except OSError:
+        m = None
+    k = (key, str(d))
+    hit = _DIRC.get(k)
+    now = time.time()
+    if hit and hit[0] == m and now - hit[1] < ttl:
+        return hit[2]
+    v = fn(*args)
+    _DIRC[k] = (m, now, v)
+    return v
+
+
+_DOCS = {}             # sidecar path -> ((inode, mtime_ns, size), parsed JSON); writers os.replace, so a rewrite is a new key
+_DOCS_BYTES = [0]
+DOCS_MAX_BYTES = 48 * 2**20     # of sidecar file size kept parsed (the rows the open tabs show); oldest dropped first
+
+
+def read_doc(path, st=None):
+    """A sidecar's JSON, parsed once per version of the file (Dino 19 Nov: the out queue re-read and re-parsed up to
+    600 sidecars on every 10 s refresh). Callers only read the result; never change it in place."""
+    try:
+        st = st or os.stat(path)
+    except OSError:
+        return None
+    key = (st.st_ino, st.st_mtime_ns, st.st_size)
+    c = _DOCS.get(path)
+    if c and c[0] == key:
+        with LOCK:                                     # most recently shown last: those are dropped last
+            if _DOCS.get(path) is c:
+                _DOCS[path] = _DOCS.pop(path)
+        return c[1]
+    doc = read_json(path)
+    with LOCK:
+        old = _DOCS.pop(path, None)
+        if old:
+            _DOCS_BYTES[0] -= old[0][2]
+        _DOCS[path] = (key, doc)
+        _DOCS_BYTES[0] += st.st_size
+        while _DOCS_BYTES[0] > DOCS_MAX_BYTES and len(_DOCS) > 1:
+            _DOCS_BYTES[0] -= _DOCS.pop(next(iter(_DOCS)))[0][2]
+    return doc
+
+
+def ensure_indexes(cfg):
+    """Indexes the dashboard's state.db queries need (Dino 19 Nov): without them every 5 s refresh scanned the whole
+    processed table ~20 times. Best effort: CREATE INDEX IF NOT EXISTS changes no data and the worker and collector
+    never notice."""
+    try:
+        db = sqlite3.connect(cfg.get("state_db", "/srv/ocr/pipeline/state.db"), timeout=10)
+        for sql in ("CREATE INDEX IF NOT EXISTS ix_processed_at ON processed(at)",
+                    "CREATE INDEX IF NOT EXISTS ix_processed_folder_at ON processed(folder, at)",
+                    "CREATE INDEX IF NOT EXISTS ix_extractions_at ON extractions(at)"):
+            try:
+                db.execute(sql)
+            except sqlite3.OperationalError as e:            # table not there yet / locked: the next start tries again
+                print(f"state.db index skipped: {e}", file=sys.stderr, flush=True)
+        db.commit()
+        db.close()
+    except Exception as e:
+        print(f"state.db indexes not checked: {e}", file=sys.stderr, flush=True)
+
+
 _CPU = {}
 
 
@@ -245,6 +315,10 @@ def upright_state():
 
 
 def count_files(d, pattern=None):
+    return dir_cached("count:" + str(pattern), d, 30, _count_files, d, pattern)
+
+
+def _count_files(d, pattern=None):
     try:
         return sum(1 for e in os.scandir(d) if e.is_file() and (pattern is None or re.search(pattern, e.name)))
     except FileNotFoundError:
@@ -351,7 +425,7 @@ def alert_flags(root):
             if e.is_file() and e.name.startswith("alert_"):
                 t = e.path and Path(e.path).read_text(encoding="utf-8", errors="replace")
                 lines = t.strip().splitlines()
-                if lines and alert_resolved(e.name[6:], lines[0]):
+                if lines and cached(f"alert:{e.name}|{lines[0]}", 15, alert_resolved, e.name[6:], lines[0]):
                     Path(e.path).unlink(missing_ok=True)
                     continue
                 out.append({"flag": e.name, "unit": e.name[6:], "at": lines[0] if lines else "", "text": "\n".join(lines[1:])[-600:]})
@@ -453,6 +527,18 @@ def queue_state(cfg):
             "running": running, "upcoming": upcoming[:12], "runners": runners[:12]}
 
 
+def _synced_today(d, today):
+    n = 0
+    try:
+        for e in os.scandir(d):
+            # 397: st_ctime = when it was moved into synced/ (a move keeps the write time, from the day it was read)
+            if e.name.endswith(".json") and date.fromtimestamp(e.stat().st_ctime).isoformat() == today:
+                n += 1
+    except FileNotFoundError:
+        pass
+    return n
+
+
 def status(cfg):
     root = Path(cfg["root"])
     flags = root / "flags"
@@ -469,11 +555,13 @@ def status(cfg):
     sync["age"] = age_seconds(sync.get("finished_at") or sync.get("started_at"))
 
     today = date.today().isoformat()
+    tomorrow = date.fromordinal(date.today().toordinal() + 1).isoformat()
     month = datetime.now().strftime("%Y-%m")
     done_today, recent, via_today, recent_by_type = {}, [], {}, {}
     try:
         db = sqlite3.connect(f"file:{cfg.get('state_db', '/srv/ocr/pipeline/state.db')}?mode=ro", uri=True, timeout=5)
-        for folder, n in db.execute("SELECT folder, COUNT(*) FROM processed WHERE status='ok' AND substr(at,1,10)=? GROUP BY folder", (today,)):
+        for folder, n in db.execute("SELECT folder, COUNT(*) FROM processed WHERE status='ok' AND at>=? AND at<? AND substr(at,1,10)=? "
+                                     "GROUP BY folder", (today, tomorrow, today)):
             done_today[folder] = n
         for src, folder, st, outputs, at in db.execute(
                 "SELECT source, folder, status, outputs, at FROM processed ORDER BY at DESC LIMIT 25"):
@@ -491,7 +579,8 @@ def status(cfg):
                     out = outputs
                 recent_by_type.setdefault(t, []).append({"source": src, "type": t, "status": st, "outputs": out, "at": at})
         try:
-            for folder, via, n in db.execute("SELECT folder, via, COUNT(*) FROM extractions WHERE substr(at,1,10)=? GROUP BY folder, via", (today,)):
+            for folder, via, n in db.execute("SELECT folder, via, COUNT(*) FROM extractions WHERE at>=? AND at<? AND substr(at,1,10)=? "
+                                           "GROUP BY folder, via", (today, tomorrow, today)):
                 via_today.setdefault(folder, {})[via] = n
         except sqlite3.OperationalError:
             pass
@@ -501,14 +590,8 @@ def status(cfg):
 
     rows = []
     for t in types:
-        synced_today = 0
-        try:
-            for e in os.scandir(root / "synced" / t / month):
-                # 397: st_ctime = when it was moved into synced/ (a move keeps the write time, from the day it was read)
-                if e.name.endswith(".json") and date.fromtimestamp(e.stat().st_ctime).isoformat() == today:
-                    synced_today += 1
-        except FileNotFoundError:
-            pass
+        sd = root / "synced" / t / month
+        synced_today = dir_cached("synced:" + today, sd, 60, _synced_today, sd, today)
         rows.append({
             "type": t,
             "label": {"JobTransfers": "Job Transfers", "PurchaseOrders": "Purchase Orders",
@@ -546,7 +629,7 @@ def status(cfg):
         "sync": sync,
         "sync_every_minutes": int(dcfg.get("sync_every_minutes", 15)),   # how often the PC's on-request task checks
         "sync_all_on": not (flags / "sync_off").exists(),
-        "ollama": ollama_state(cfg),
+        "ollama": cached("ollama", 10, ollama_state, cfg),
         "gpu": cached("gpu", 10, gpu_state),
         "upright": cached("upright", 10, upright_state),                  # 737
         "cpu": cached("cpu", 10, cpu_state),                              # 491
@@ -1075,22 +1158,39 @@ def _check_kinds(e):
     return ks
 
 
+_SUPP = {}
+
+
+def suppliers_vat(root):
+    """suppliers.csv as (VAT numbers, VAT -> Sage account), read again only when the file changes."""
+    import csv
+    p = Path(root) / "suppliers.csv"
+    try:
+        st = os.stat(p)
+        key = (str(p), st.st_ino, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return set(), {}
+    if _SUPP.get("key") != key:
+        sage, sage_acct = set(), {}
+        try:
+            with open(p, newline="", encoding="utf-8-sig") as f:
+                for r in csv.DictReader(f):
+                    v = re.sub(r"\D", "", r.get("VatNo") or "")
+                    if v:
+                        sage.add(v)
+                        if (r.get("SageAccount") or "").strip():
+                            sage_acct[v] = r["SageAccount"].strip()
+        except FileNotFoundError:
+            return set(), {}
+        _SUPP.update(key=key, val=(sage, sage_acct))
+    return _SUPP["val"]
+
+
 def out_queue(cfg, t, limit=300, sorts=None, check=None):
     if t not in cfg["doc_types"]:
         raise ValueError("unknown type")
-    import csv
     root = Path(cfg["root"])
-    sage, sage_acct = set(), {}
-    try:
-        with open(root / "suppliers.csv", newline="", encoding="utf-8-sig") as f:
-            for r in csv.DictReader(f):
-                v = re.sub(r"\D", "", r.get("VatNo") or "")
-                if v:
-                    sage.add(v)
-                    if (r.get("SageAccount") or "").strip():
-                        sage_acct[v] = r["SageAccount"].strip()
-    except FileNotFoundError:
-        pass
+    sage, sage_acct = suppliers_vat(root)
     tmap = ((read_json(root / "sharepoint_map.json") or {}).get("types") or {}).get(t)
     sap = sage_ap(root) if cfg["doc_types"][t].get("doc_type") == "supplier_invoice" or t.startswith("SupplierInvoices") else None
     spo = sage_po(root) if t == "PolymerOrders" else None
@@ -1099,9 +1199,13 @@ def out_queue(cfg, t, limit=300, sorts=None, check=None):
            "route_types": move_types(cfg)}
     for key, d in (("ready", root / "out" / t), ("held", root / "out" / t / "hold")):
         try:
-            files = sorted((e for e in os.scandir(d) if e.is_file() and e.name.endswith(".json")), key=lambda e: e.stat().st_mtime)
+            ents = list(os.scandir(d))
         except FileNotFoundError:
             continue
+        # one listing answers "is the PDF / .attempts / .uploaded there?" instead of three look-ups per row
+        here = {e.name for e in ents}
+        here_files = {e.name for e in ents if e.is_file()}
+        files = sorted((e for e in ents if e.is_file() and e.name.endswith(".json")), key=lambda e: e.stat().st_mtime)
         res[key + "_total"] = len(files)
         kinds_of = {e.path: _check_kinds(e) for e in files}
         cnt = {}
@@ -1116,25 +1220,27 @@ def out_queue(cfg, t, limit=300, sorts=None, check=None):
         if sk and re.fullmatch(r"_?[a-z0-9_]{1,40}", sk):
             files = _sort_files(files, sk, sd)
         for e in files[:limit]:
-            doc = read_json(e.path) or {}
+            doc = read_doc(e.path, e.stat()) or {}
             f = doc.get("fields") or {}
             items = [i for i in (f.get("items") or []) if isinstance(i, dict)]
             amounts = [_num(i.get("amount")) for i in items]
             attempts = 0
-            try:
-                attempts = int(Path(e.path + ".attempts").read_text().strip() or 0)
-            except (FileNotFoundError, ValueError):
-                pass
+            if e.name + ".attempts" in here:
+                try:
+                    attempts = int(Path(e.path + ".attempts").read_text().strip() or 0)
+                except (FileNotFoundError, ValueError):
+                    pass
+            pf = str(doc.get("file") or "")
             vat = re.sub(r"\D", "", str(f.get("supplier_vat_no") or ""))
             res[key].append({
                 "name": e.name, "file": doc.get("file"),
-                "pdf": bool(doc.get("file")) and Path(d, str(doc.get("file"))).is_file(),
+                "pdf": bool(pf) and (pf in here_files if "/" not in pf else Path(d, pf).is_file()),
                 "doc_type": doc.get("doc_type"), "needs_review": bool(doc.get("needs_review")),
                 "flags": doc.get("flags") or [], "extractor": doc.get("extractor"), "processed_at": doc.get("processed_at"),
                 "reader": doc.get("reader"), "model": doc.get("model"), "checked_at": doc.get("checked_at"),
                 "source_folder": doc.get("source_folder"), "edits": len(doc.get("edits") or []),
                 "source_file": doc.get("source_file"), "attempts": attempts, "hold_reason": doc.get("hold_reason"),
-                "uploaded": Path(e.path + ".uploaded").exists(),
+                "uploaded": e.name + ".uploaded" in here,
                 "fields": {k: f.get(k) for k in OUT_FIELDS if f.get(k) not in (None, "")},
                 "items": items[:150], "item_count": len(items),
                 "items_total": round(sum(a for a in amounts if a is not None), 2) if any(a is not None for a in amounts) else None,
@@ -2210,6 +2316,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         textual = ctype.startswith("text/") or ctype == "application/json"
         self.send_header("Content-Type", ctype + ("; charset=utf-8" if textual and "charset" not in ctype else ""))
+        if textual:
+            self.send_header("Vary", "Accept-Encoding")
+            # Dino 19 Nov: an out queue is ~1 MB of JSON every 10 s and the page ~100 KB; gzip makes them ~30x smaller
+            if len(data) > 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
+                data = gzip.compress(data, compresslevel=5)
+                self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Frame-Options", "DENY")
@@ -2689,19 +2801,23 @@ function renderJob(d,t){
   $("#vatcard").hidden=!t.vat;
   if(t.vat&&(!vatLoaded||Date.now()-vatLoaded>120000))loadVat();   // again each time the tab opens, if 2+ min old
   const key=t.types.join(",");
-  if(key!=outKey){outKey=key;outData={};$("#outq").innerHTML="";loadOut()}
-  else renderOut();
+  if(key!=outKey){outKey=key;outData={};$("#outq").innerHTML="";outHtml="";loadOut()}
+  else renderOut(false,true);
 }
 // ---- out queue + Sync now (job tabs). The list is fetched on tab open, after actions and every 10 s.
-let outKey="",outData={},outOpen=new Set(),outTimer=null;
+let outKey="",outData={},outOpen=new Set(),outTimer=null,outHtml="";
 const outSort={},outCheck={},outScrollReset=new Set();      // "<type>|r" / "<type>|h" -> {k: column key, d: "asc"|"desc"}: header clicks
-async function loadOut(){
+// auto = the 10 s timer: skipped while the browser tab is hidden, and the list is only redrawn if something changed
+async function loadOut(auto){
+  const again=()=>{clearTimeout(outTimer);outTimer=setTimeout(()=>{if(tab!="overview")loadOut(true)},10000)};
+  if(auto&&document.hidden)return again();
   const types=outKey?outKey.split(","):[];
-  try{for(const t of types){const sr=outSort[t+"|r"],sh=outSort[t+"|h"];
+  try{const got=await Promise.all(types.map(async t=>{const sr=outSort[t+"|r"],sh=outSort[t+"|h"];     // both queues of a tab at once
     const qs=(sr?`&sort=${encodeURIComponent(sr.k)}&dir=${sr.d}`:"")+(sh?`&hsort=${encodeURIComponent(sh.k)}&hdir=${sh.d}`:"")+(outCheck[t]?"&check="+encodeURIComponent(outCheck[t]):"");
-    const r=await fetch("/api/out?type="+encodeURIComponent(t)+qs);if(r.status==401)return location.reload();outData[t]=await r.json();if(outData[t].writers)WRITERS=outData[t].writers;if(outData[t].route_to)ROUTE=outData[t].route_to;if(outData[t].route_types)RTYPES=outData[t].route_types;if(outData[t].units)UNITS=outData[t].units}}
+    const r=await fetch("/api/out?type="+encodeURIComponent(t)+qs);if(r.status==401){location.reload();throw new Error("login")}return [t,await r.json()]}));
+    for(const [t,j] of got){outData[t]=j;if(j.writers)WRITERS=j.writers;if(j.route_to)ROUTE=j.route_to;if(j.route_types)RTYPES=j.route_types;if(j.units)UNITS=j.units}}
   catch(e){}
-  renderOut();clearTimeout(outTimer);outTimer=setTimeout(()=>{if(tab!="overview")loadOut()},10000)}
+  renderOut(false,auto);again()}
 const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_number",0,1],["Date","invoice_date"],["Total","total",1]],
   po:[["Order no","order_number",0,1],["Supplier","supplier"],["Document type","library_doc_type",0,0,"wrap"],["Method","order_method"],["Att of","att_of"],["Date","date"],
     ["Allocation","allocation"],["Job","job_number"],["Other PO ref","other_po_ref"],["Quote ref","quote_ref"],
@@ -2987,15 +3103,22 @@ function syncStatus(d,ty){
     ${stale?` It hasn't checked in for ${ago(sy.age)}: it must be on, with you signed in and the on-request task installed.`:""}</div>`;
   if(L)return `<div class="qstat ${L.result=="ok"?"":"warn"}">Last sync ${esc((L.at||"").replace("T"," ").slice(0,16))}: ${esc(L.result)} · ${L.synced} synced${L.failed?` · ${L.failed} failed`:""}${L.gave_up?` · ${L.gave_up} moved to sync failed`:""}${L.message?` <span class="err">${esc(L.message)}</span>`:""}</div>`;
   return `<div class="qstat muted">Not synced from the dashboard yet.</div>`}
-function renderOut(force){
+function renderOut(force,auto){
   const d=last;if(!d||tab=="overview"||tab=="train")return;
   if(editing&&!force)return;           // keep the inputs; the list refreshes after Save / Cancel
   if(!force&&document.activeElement&&document.activeElement.matches("select.route,select.chkf"))return;   // a Move to... list is open
   if(!force&&colDrag)return;                                                                  // a column is being resized
   const types=outKey.split(",");
+  const html=types.map(t=>outSection(d,t)).join("");
+  if(auto&&html==outHtml)return;      // a timed refresh with nothing new: keep the list as it is (no flicker, hover, scroll jumps)
+  outHtml=html;
   const keep={};$("#outq").querySelectorAll(".qscroll[data-qs]").forEach(el=>{if(!outScrollReset.has(el.dataset.qs))keep[el.dataset.qs]=[el.scrollTop,el.scrollLeft]});
   outScrollReset.clear();const pageY=window.scrollY;
-  $("#outq").innerHTML=types.map(t=>{
+  $("#outq").innerHTML=html;
+  $("#outq").querySelectorAll(".qscroll[data-qs]").forEach(el=>{const k=keep[el.dataset.qs];if(k){el.scrollTop=k[0];el.scrollLeft=k[1]}});
+  if(window.scrollY!=pageY)window.scrollTo(window.scrollX,pageY);
+}
+function outSection(d,t){
     const ty=d.types.find(x=>x.type==t),q=outData[t];if(!ty)return "";
     const cols=COLS[DT[t]]||COLS.supplier_invoice,n=q?q.ready_total:ty.awaiting_sync;
     const can=d.sync_all_on&&ty.sync_on&&!ty.sync_running&&!ty.sync_requested&&n>0;
@@ -3022,10 +3145,7 @@ function renderOut(force){
         :`<div class="small muted">Nothing waiting to sync.</div>`}
       ${q&&q.held.length?`<details ${outOpen.has("held|"+t)?"open":""} data-held="${esc(t)}"><summary>On hold (${q.held_total}): skipped by Sync now until released${q.held_total>q.held.length?` · showing the ${outSort[t+"|h"]?"first":"oldest"} ${q.held.length}`:""}</summary>
         <div class="scroll qscroll" data-qs="${esc(t)}|h"><table class="q${tfix}" data-type="${esc(t)}"><thead>${head("h")}</thead><tbody>${docRows(t,q.held,true)}</tbody></table></div></details>`:""}
-      <div class="small muted" style="margin-top:8px">Click a row to see what goes to SharePoint and SQL, with its line items. Hold keeps a document back from the next sync. Move to… sends a document to the right queue, where it is read again.</div></section>`}).join("");
-  $("#outq").querySelectorAll(".qscroll[data-qs]").forEach(el=>{const k=keep[el.dataset.qs];if(k){el.scrollTop=k[0];el.scrollLeft=k[1]}});
-  if(window.scrollY!=pageY)window.scrollTo(window.scrollX,pageY);
-}
+      <div class="small muted" style="margin-top:8px">Click a row to see what goes to SharePoint and SQL, with its line items. Hold keeps a document back from the next sync. Move to… sends a document to the right queue, where it is read again.</div></section>`}
 $("#outq").addEventListener("click",e=>{
   const h=e.target.closest("th[data-sort]");if(!h)return;
   if(e.target.closest(".rz")||Date.now()-(window.__rzUp||0)<400){e.stopPropagation();return}   // a resize, not a sort
@@ -3248,7 +3368,8 @@ async function refresh(){if(busy)return;try{const r=await fetch("/api/status");i
 $("#loadlogs").onclick=async()=>{const r=await fetch("/api/logs?svc="+encodeURIComponent($("#svc").value));$("#logs").textContent=await r.text();$("#logs").classList.remove("muted");const p=$("#logs");p.scrollTop=p.scrollHeight};
 $("#svc").onchange=()=>$("#loadlogs").click();
 $("#logout").onclick=async()=>{await fetch("/logout",{method:"POST",headers:{"X-CSRF":CSRF}});location.reload()};
-refresh();setInterval(refresh,5000);
+refresh();setInterval(()=>{if(!document.hidden)refresh()},5000);     // Dino 19 Nov: no polling from a tab nobody is looking at
+document.addEventListener("visibilitychange",()=>{if(document.hidden)return;refresh();if(outKey&&tab!="overview"&&tab!="train")loadOut(true)});
 </script></body></html>"""
 
 
@@ -3262,6 +3383,7 @@ def main():
     d = cfg.get("dashboard", {})
     if not d.get("password_hash"):
         sys.exit("No dashboard password set. Run:  python3 dashboard.py --set-password")
+    ensure_indexes(cfg)
     addr = (d.get("bind", "0.0.0.0"), int(d.get("port", 8090)))
     print(f"MPS OCR dashboard on http://{addr[0]}:{addr[1]}", flush=True)
     ThreadingHTTPServer(addr, Handler).serve_forever()
