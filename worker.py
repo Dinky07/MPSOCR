@@ -31,6 +31,10 @@ try:
 except Exception:
     jt_copy = None
 try:
+    import inv_split                      # 19 Nov 2026: a supplier-invoice scan holding several invoices -> one part each
+except ImportError:
+    inv_split = None
+try:
     import paddle_text                    # 761 (17 Nov 2026): PaddleOCR text as the GPU's hint + number/total check
 except Exception:
     paddle_text = None
@@ -568,6 +572,8 @@ class Worker:
         self.sizes = {}
         self.deferred = set()        # files waiting for the GPU while CPU work continues
         self.cpu_cache = {}          # CPU results kept while a file waits for the GPU
+        self.part_text = {}          # part path -> (text, source) read by the invoice split (no second OCR)
+        self.part_info = {}          # part path -> {"pages": [...], "of": n, "invoices_in_file": k} (invoice split)
         self.suppliers = None
         self.supplier_csv = self.supplier_mtime = None
         for t in self.types.values():
@@ -653,12 +659,24 @@ class Worker:
 
     def write_cpu_note(self, folder, name, digest):
         """The CPU lane's rejected pass, for the GPU worker (written before the file goes back to in/)."""
+        # 19 Nov: a split invoice file has one CPU result per invoice (all kept, under "parts") and the split itself
+        note, parts = {"at": now_iso()}, {}
         for key in [k for k in self.cpu_cache if k.startswith(digest + ":")]:
-            fields, reasons, text, text_src = self.cpu_cache.pop(key)
-            p = self.cpu_note(folder, name)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(p, json.loads(json.dumps({"key": key, "fields": fields, "reasons": reasons, "text": text,
-                                                        "text_src": text_src, "at": now_iso()}, default=str)))
+            v = self.cpu_cache.pop(key)
+            if key.endswith(":split"):
+                note["split"] = v
+                continue
+            fields, reasons, text, text_src = v
+            parts[key] = {"fields": fields, "reasons": reasons, "text": text, "text_src": text_src}
+        if not parts and "split" not in note:
+            return
+        if len(parts) == 1:
+            k, v = next(iter(parts.items()))
+            note.update({"key": k, **v})                 # the one-invoice layout, as before
+        note["parts"] = parts
+        p = self.cpu_note(folder, name)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(p, json.loads(json.dumps(note, default=str)))
 
     def read_page(self, fn, fewshot, extra):
         """fn(fewshot_dir) reads one page. An Ollama 5xx (29 Oct: "prediction aborted, token repeat limit reached" - the
@@ -957,15 +975,56 @@ class Worker:
         dst.with_name(dst.name + ".error.txt").write_text(f"{now_iso()}\n{msg}\n", encoding="utf-8")
         self.status["last_error"] = {"file": path.name, "error": msg[:300], "at": now_iso()}
 
-    def split(self, path, td, tcfg):
+    def split(self, path, td, tcfg, digest=None, folder=None, name=None):
         """Returns [(page_no or None, pdf_path)]."""
         if path.suffix.lower() != ".pdf":
             return [(None, path)]
         pages = int(re.search(r"Pages:\s+(\d+)", run(["pdfinfo", str(path)], 60)).group(1))
+        if tcfg.get("split_invoices") and tcfg.get("doc_type") == "supplier_invoice" and pages > 1 and inv_split and digest:
+            return self.split_invoices(path, td, tcfg, pages, digest, folder, name)
         if not tcfg.get("split_pages") or pages == 1:
             return [(None, path)]
         run(["pdfseparate", str(path), str(td / "page-%03d.pdf")])
         return [(i, td / f"page-{i:03d}.pdf") for i in range(1, pages + 1)]
+
+    def split_invoices(self, path, td, tcfg, pages, digest, folder, name):
+        """19 Nov (Dino): one scan with several supplier invoices -> one part per invoice (inv_split.groups). Each page is
+        read once (text layer or Tesseract); the parts' texts are kept in self.part_text so the CPU reader doesn't OCR
+        them again. The split is cached with the CPU results (and in the CPU lane's note), so the GPU worker reuses it.
+        A file with one invoice comes back whole, as before. Returns [(first page or None, pdf_path)]."""
+        key = f"{digest}:split"
+        sp = self.cpu_cache.get(key)
+        if sp is None:
+            sp = (read_json_file(self.cpu_note(folder, name)) or {}).get("split") if folder and name else None
+        if not sp or sp.get("pages") != pages:
+            limit = int(tcfg.get("split_max_pages", 60))
+            if pages > limit:
+                log.warning("%s: %d pages, more than split_max_pages %d: read as one invoice", name, pages, limit)
+                return [(None, path)]
+            c = tcfg.get("cpu", {})
+            try:
+                texts = inv_split.page_texts(path, int(c.get("ocr_dpi", 300)), c.get("ocr_lang", "eng"))
+            except Exception as e:
+                log.warning("invoice split: reading the pages of %s failed (%s): read as one invoice", name, e)
+                return [(None, path)]
+            grps, infos = inv_split.groups([t for t, _ in texts])
+            sp = {"pages": pages, "groups": grps, "texts": [list(x) for x in texts],
+                  "numbers": [i["invoice_number"] for i in infos]}
+        self.cpu_cache[key] = sp
+        texts = [tuple(x) for x in sp["texts"]]
+        maxp = int(tcfg.get("max_pages", self.cfg.get("max_pages_per_doc", 4)))
+        joined = lambda g: ("\n".join(texts[p - 1][0] for p in g[:maxp]),
+                            "tesseract" if any(texts[p - 1][1] == "tesseract" for p in g[:maxp]) else "text_layer")
+        if len(sp["groups"]) == 1:
+            self.part_text[str(path)] = joined(sp["groups"][0])
+            return [(None, path)]
+        log.info("%s holds %d invoices: pages %s (numbers seen %s)", name, len(sp["groups"]), sp["groups"],
+                 [n for n in sp["numbers"] if n])
+        parts = inv_split.write_parts(path, sp["groups"], td)
+        for g, (first, part) in zip(sp["groups"], parts):
+            self.part_text[str(part)] = joined(g)
+            self.part_info[str(part)] = {"pages": g, "of": pages, "invoices_in_file": len(sp["groups"])}
+        return parts
 
     def fix_invoice_from_text(self, fields, flags, part, text, tcfg, extra):
         """The model often misses the supplier's VAT number (every invoice to MPS also prints MPS's own) and invoice
@@ -1427,7 +1486,7 @@ class Worker:
                 elif doc_type in ("ws", "test_cert"):
                     parts = []
                 else:
-                    parts = self.split(rd, Path(td), tcfg)
+                    parts = self.split(rd, Path(td), tcfg, digest, folder, src.name)
                 presort_futs = self.presort_prefetch(parts, meta, src) if doc_type == "po" and len(parts) > 1 else {}
                 # one file = one document around its order form (Dino 29 Oct): pages grouped before publishing
                 grouping = bool(tcfg.get("group_pages")) and doc_type == "po" and len(parts) > 1
@@ -1449,18 +1508,22 @@ class Worker:
                         raise OllamaDown("shutdown")         # puts the file back in the queue
                     t0 = time.time()
                     extra = {}
+                    if str(part) in self.part_info:     # 19 Nov: one of several invoices in the scan
+                        extra["invoice_split"] = self.part_info[str(part)]
                     text = None
                     if tcfg.get("cpu_first"):
                         key = f"{digest}:{page}"
                         if key not in self.cpu_cache:
                             n = read_json_file(self.cpu_note(folder, src.name)) or {}
-                            if n.get("key") == key:          # the CPU lane's pass (332): no second Tesseract run here
+                            n = (n.get("parts") or {}).get(key) or (n if n.get("key") == key else None)
+                            if n:                            # the CPU lane's pass (332): no second Tesseract run here
                                 self.cpu_cache[key] = (n.get("fields"), n.get("reasons") or [], n.get("text") or "", n.get("text_src"))
                         if key not in self.cpu_cache:
                             try:
                                 self.cpu_cache[key] = cpu_invoice.extract(
                                     part, self.suppliers, parse_date, tcfg.get("cpu", {}),
-                                    int(tcfg.get("max_pages", self.cfg.get("max_pages_per_doc", 4))))
+                                    int(tcfg.get("max_pages", self.cfg.get("max_pages_per_doc", 4))),
+                                    text=self.part_text.get(str(part)))
                             except Exception as e:
                                 log.warning("CPU OCR failed on %s: %s", src.name, e)
                                 self.cpu_cache[key] = (None, [f"cpu_error: {str(e)[:120]}"], "", None)
@@ -1740,6 +1803,8 @@ class Worker:
             self.db.commit()
         finally:
             self.status["current"] = None
+            self.part_text.clear()
+            self.part_info.clear()
             if not (self.root / "in" / folder / src.name).exists():     # finished (ok or failed): drop cached CPU results
                 for k in [k for k in self.cpu_cache if k.startswith(digest)]:
                     self.cpu_cache.pop(k, None)
