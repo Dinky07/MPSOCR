@@ -43,6 +43,10 @@ try:
 except Exception:                         # the worker runs without it, reading scans as they are
     upright_step = None
 try:
+    import pdf_shrink                     # 19 Nov 2026: out/ PDFs resampled to 200 dpi JPEG (5 MB scans -> under 1 MB)
+except ImportError:                       # pragma: no cover - PDFs are published as scanned
+    pdf_shrink = None
+try:
     import po_reader                      # the trained purchase-order reader (po_ocr_v2): prompt, worked examples, tidy
 except ImportError:                       # pragma: no cover - the worker still runs, with the generic PO prompt
     po_reader = None
@@ -1136,6 +1140,22 @@ class Worker:
         texts = pop_reader.ocr_pages(part, min(n, int(tcfg.get("pop_scan_pages", 8))))
         return [i + 1 for i, t in enumerate(texts) if pop_reader.is_payment_page(t)], texts, n
 
+    def publish_pdf(self, src, dst, tcfg, fields=None):
+        """Put src in out/ as dst (via dst.tmp, so the PC never sees half a file): a smaller copy when pdf_shrink can
+        make one ("shrink" in config.json, whole pipeline or one doc type; false = as scanned). A content_hash in
+        fields that was the hash of src is moved to the published file, so it stays the library's Content Hash.
+        Returns {"bytes_in", "bytes_out", ...} for the sidecar when the file was shrunk, else None."""
+        scfg = tcfg.get("shrink", self.cfg.get("shrink", True))
+        if not pdf_shrink or scfg is False:
+            shutil.copy2(src, dst.with_name(dst.name + ".tmp"))
+            os.replace(dst.with_name(dst.name + ".tmp"), dst)
+            return None
+        info = pdf_shrink.publish(Path(src), Path(dst), scfg if isinstance(scfg, dict) else None, log)
+        if info and fields is not None and fields.get("content_hash"):
+            if str(fields["content_hash"]).upper() == sha256(src).upper():
+                fields["content_hash"] = sha256(dst).upper()
+        return info
+
     @staticmethod
     def order_pages(first, npdf, pop_pages, limit):
         """How many pages from `first` the PO reader gets: stop at the next payment page."""
@@ -1720,8 +1740,7 @@ class Worker:
                     outputs.append(rel if dest == folder else f"{dest}/{rel}")
                     if hold_reason:
                         flags = [f for f in flags if f != "held"] + ["held: " + hold_reason]
-                    shutil.copy2(part, pdf_dst.with_name(pdf_dst.name + ".tmp"))
-                    os.replace(pdf_dst.with_name(pdf_dst.name + ".tmp"), pdf_dst)
+                    shrunk = self.publish_pdf(part, pdf_dst, tcfg, fields)
                     sidecar = {
                         "schema_version": 1,
                         "doc_id": doc_id,
@@ -1736,6 +1755,7 @@ class Worker:
                         "source_page": page,
                         **({"upright": up_info} if up_info else {}),     # 745: pages turned / left to check
                         "pages_read": npages,
+                        **({"shrunk": shrunk} if shrunk else {}),      # 19 Nov: pdf_shrink sizes (bytes_in -> bytes_out)
                         "processed_at": now_iso(),
                         "seconds": round(secs, 1),
                         "model": tcfg.get("model", self.cfg.get("model")),
@@ -1825,9 +1845,8 @@ class Worker:
                 out_dir.mkdir(parents=True, exist_ok=True)
                 pdf_dst = unique_path(out_dir, safe_name(d["stem"], 120), ".pdf")
                 outs.append(f"{folder}/hold/{pdf_dst.name}" if held else f"{folder}/{pdf_dst.name}")
-                shutil.copy2(d["pdf"], pdf_dst.with_name(pdf_dst.name + ".tmp"))
-                os.replace(pdf_dst.with_name(pdf_dst.name + ".tmp"), pdf_dst)
                 f = d["fields"]
+                shrunk = self.publish_pdf(d["pdf"], pdf_dst, tcfg, f)
                 sidecar = {
                     "schema_version": 1,
                     "doc_id": f"{digest[:16]}-p{d['pages'][0]:03d}",
@@ -1840,6 +1859,7 @@ class Worker:
                     "source_page": d["pages"][0],
                     "source_pages": d["pages"],
                     "pages_read": len(d["pages"]),
+                    **({"shrunk": shrunk} if shrunk else {}),      # 19 Nov: pdf_shrink sizes (bytes_in -> bytes_out)
                     "processed_at": now_iso(),
                     "seconds": round(time.time() - t0, 1),
                     "model": "zbar+tesseract" if prep == "ocrmypdf" else "zbar",
@@ -1913,10 +1933,9 @@ class Worker:
                 part = co_reader.split_pdf(up, o["pages"], tmp / f"o{o['pages'][0]:03d}.pdf", len(texts))
                 pdf_dst = unique_path(out_dir, safe_name(stem, 150), ".pdf")
                 outs.append(f"hold/{pdf_dst.name}" if held else pdf_dst.name)
-                shutil.copy2(part, pdf_dst.with_name(pdf_dst.name + ".tmp"))
-                os.replace(pdf_dst.with_name(pdf_dst.name + ".tmp"), pdf_dst)
                 f = o["fields"]
-                f["content_hash"] = sha256(part).upper()
+                shrunk = self.publish_pdf(part, pdf_dst, tcfg)
+                f["content_hash"] = sha256(pdf_dst).upper()      # the hash of the file published (the library's)
                 gpu = bool(o.get("gpu_ran")) or o.get("lines_from") == "gpu"     # 763: the model read it, whether or not its lines added up
                 sidecar = {
                     "schema_version": 1,
@@ -1930,6 +1949,7 @@ class Worker:
                     "source_page": o["pages"][0],
                     "source_pages": o["pages"],
                     "pages_read": len(o["pages"]),
+                    **({"shrunk": shrunk} if shrunk else {}),      # 19 Nov: pdf_shrink sizes (bytes_in -> bytes_out)
                     "processed_at": now_iso(),
                     "seconds": round(time.time() - t0, 1),
                     "model": c["gpu_model"] if gpu else "zbar+tesseract+rules",
@@ -1969,9 +1989,8 @@ class Worker:
                 out_dir.mkdir(parents=True, exist_ok=True)
                 pdf_dst = unique_path(out_dir, safe_name(d["stem"], 120), ".pdf")
                 outs.append(f"hold/{pdf_dst.name}" if held else pdf_dst.name)
-                shutil.copy2(d["pdf"], pdf_dst.with_name(pdf_dst.name + ".tmp"))
-                os.replace(pdf_dst.with_name(pdf_dst.name + ".tmp"), pdf_dst)
                 f = d["fields"]
+                shrunk = self.publish_pdf(d["pdf"], pdf_dst, tcfg, f)
                 sidecar = {
                     "schema_version": 1,
                     "doc_id": f"{digest[:16]}-p{d['pages'][0]:03d}",
@@ -1985,6 +2004,7 @@ class Worker:
                     "source_pages": d["pages"],
                     "blank_pages_dropped": d["dropped"],
                     "pages_read": len(d["pages"]),
+                    **({"shrunk": shrunk} if shrunk else {}),      # 19 Nov: pdf_shrink sizes (bytes_in -> bytes_out)
                     "processed_at": now_iso(),
                     "seconds": round(time.time() - t0, 1),
                     "model": c.get("model", rn_reader.DEFAULTS["model"]),
