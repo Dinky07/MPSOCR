@@ -64,5 +64,44 @@ def test_switched_off_or_not_a_pdf(tmp_path):
     src = tmp_path / "in.pdf"
     _scan_pdf(src, pages=1)
     assert pdf_shrink.shrink(src, tmp_path / "o.pdf", False) is None
-    assert pdf_shrink.shrink(tmp_path / "x.jpg", tmp_path / "o.jpg") is None
+    assert pdf_shrink.shrink(tmp_path / "x.png", tmp_path / "o.png") is None
     assert not (tmp_path / "o.pdf").exists()
+
+
+def _jpeg(path, size, quality):
+    im = Image.new("RGB", size, "white")
+    d = ImageDraw.Draw(im)
+    rnd = random.Random(2)
+    for y in range(10, size[1] - 10, 14):
+        d.text((10, y), "LINE %d %d" % (y, rnd.randint(0, 99999)), fill=(rnd.randint(0, 80),) * 3)
+    im.save(path, "JPEG", quality=quality)
+
+
+def test_jpeg_quality_estimate(tmp_path):
+    for q in (50, 70, 95):
+        _jpeg(tmp_path / "q.jpg", (400, 300), q)
+        assert abs(pdf_shrink.jpeg_quality((tmp_path / "q.jpg").read_bytes()) - q) <= 2
+
+
+def test_200dpi_low_quality_scan_left_alone_high_quality_resaved(tmp_path):
+    src, dst = tmp_path / "in.pdf", tmp_path / "out.pdf"
+    _scan_pdf(src, pages=1, dpi=200)                     # 200 dpi at quality 95: resaved at 70, same size
+    info = pdf_shrink.shrink(src, dst)
+    assert info
+    with pikepdf.open(str(dst)) as out:
+        im = next(iter(out.pages[0].images.values()))
+        assert abs(int(im.Width) - round(8.27 * 200)) <= 2
+        assert abs(pdf_shrink.jpeg_quality(im.read_raw_bytes()) - 70) <= 2
+    # that output is now at 200 dpi / quality 70: a second pass leaves it alone
+    assert pdf_shrink.shrink(dst, tmp_path / "again.pdf") is None
+
+
+def test_big_jpg_photo_is_capped(tmp_path):
+    src, dst = tmp_path / "photo.jpg", tmp_path / "out.jpg"
+    _jpeg(src, (4000, 3000), 95)
+    info = pdf_shrink.shrink(src, dst)
+    assert info and info["bytes_out"] < info["bytes_in"]
+    assert max(Image.open(dst).size) == round(11.69 * 200)
+    small = tmp_path / "small.jpg"
+    _jpeg(small, (1600, 1200), 60)
+    assert pdf_shrink.shrink(small, tmp_path / "o2.jpg") is None

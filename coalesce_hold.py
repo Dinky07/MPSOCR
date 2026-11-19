@@ -25,6 +25,10 @@ from pathlib import Path
 sys.path.insert(0, "/srv/ocr/pipeline")
 import route_sort                                       # noqa: E402  remove()
 import sidecar_lock                                     # noqa: E402
+try:
+    import pdf_shrink                                   # noqa: E402  19 Nov: whole-scan copies shrunk too
+except ImportError:
+    pdf_shrink = None
 
 ROOT = Path("/srv/ocr/scans/pipeline")
 ORDER_FORMS = {"mps_order", "polymer_order", "internal_group_transfer", "ronin_order"}
@@ -145,8 +149,9 @@ def main():
                     name = f"{stem}{label}_{k}.pdf"
                     k += 1
                 tmp_pdf = hold / (name + ".part")
-                if whole:
-                    shutil.copy2(orig, tmp_pdf)
+                if whole:      # the original scan: shrunk like the worker's PDFs (pdf_shrink, 19 Nov)
+                    if not (pdf_shrink and pdf_shrink.shrink(orig, tmp_pdf)):
+                        shutil.copy2(orig, tmp_pdf)
                 else:
                     with tempfile.TemporaryDirectory() as td:
                         out = Path(td) / "m.pdf"
