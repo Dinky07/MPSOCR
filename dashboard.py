@@ -19,7 +19,7 @@ Standard library only.
 import argparse, getpass, hashlib, hmac, json, os, re, secrets, shutil, sqlite3, subprocess, sys, threading, time
 import urllib.request
 import model_call                      # every Ollama request goes through here
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -572,8 +572,13 @@ def _name_key(name):
     return None
 
 
-def missing_vat(cfg):
-    """VAT numbers read on supplier invoices that aren't on the Sage list (suppliers.csv); same rules as missing_vat.py."""
+def missing_vat(cfg, recent_days=90):
+    """VAT numbers read on supplier invoices that aren't on the Sage list (suppliers.csv); same rules as missing_vat.py.
+    Dino 19 Nov ("doesn't seem current"): the list was sorted by invoice count over everything ever read, archive
+    included, so 2024-25 suppliers filled the top and this week's new ones sat at the bottom. Now each VAT number carries
+    when it was last scanned and how many invoices came in the last recent_days; the list is newest-scanned first and
+    split into recent / older; the same invoice in out/ and synced/ counts once; VAT numbers only ever learned (no
+    invoice on the box) are listed separately."""
     import csv
     root = Path(cfg["root"])
     own = OWN_VAT | {re.sub(r"\D", "", str(v)) for v in (cfg.get("own_vat") or [])}
@@ -589,7 +594,10 @@ def missing_vat(cfg):
     except FileNotFoundError:
         pass
     sage_keys = {_name_key(n) for n in sage.values()} - {None}
-    seen, no_vat = {}, {}
+    today = date.today()
+    cutoff = (today - timedelta(days=recent_days)).isoformat()
+    latest_ok = (today + timedelta(days=7)).isoformat()      # a misread date in the future is not "latest"
+    seen, no_vat, counted = {}, {}, set()
     for sub in ("synced", "out", "done"):
         for t in ("SupplierInvoices", "SupplierInvoicesArchive"):
             d = root / sub / t
@@ -607,29 +615,55 @@ def missing_vat(cfg):
                 f = doc.get("fields") or {}
                 v = re.sub(r"\D", "", str(f.get("supplier_vat_no") or ""))
                 name = (f.get("supplier_name") or "?").strip() or "?"
+                inv = re.sub(r"\s", "", str(f.get("invoice_number") or "")).upper()
+                key = (v, _name_key(name), inv) if inv else ("file", j.name)
+                if key in counted:                         # the same invoice in out/ and synced/ (re-read, re-queued)
+                    continue
+                counted.add(key)
                 if not re.fullmatch(r"4\d{9}", v) or v in own:
                     if _name_key(name) not in sage_keys:     # GPU left the VAT out, but the name is a Sage supplier: fine
                         no_vat[name] = no_vat.get(name, 0) + 1
                     continue
-                s = seen.setdefault(v, {"names": {}, "n": 0, "last": ""})
+                at = str(doc.get("processed_at") or "")[:10]
+                if not at:
+                    try:
+                        at = datetime.fromtimestamp(j.stat().st_mtime).date().isoformat()
+                    except OSError:
+                        at = ""
+                inv_date = str(f.get("invoice_date") or "")
+                s = seen.setdefault(v, {"names": {}, "n": 0, "last": "", "scanned": "", "recent": 0, "archive": 0})
                 s["n"] += 1
                 s["names"][name] = s["names"].get(name, 0) + 1
-                s["last"] = max(s["last"], str(f.get("invoice_date") or ""))
-    note = None
+                if inv_date <= latest_ok:
+                    s["last"] = max(s["last"], inv_date)
+                s["scanned"] = max(s["scanned"], at)
+                if t == "SupplierInvoicesArchive":
+                    s["archive"] += 1
+                elif max(at, inv_date if inv_date <= latest_ok else "") >= cutoff:
+                    s["recent"] += 1
+    note, learned = None, []
     try:                                                   # VAT numbers the worker learned from invoices
         db = sqlite3.connect(f"file:{cfg.get('state_db', '/srv/ocr/pipeline/state.db')}?mode=ro", uri=True, timeout=5)
-        for v, name, _at in db.execute("SELECT vat_no, name, at FROM suppliers WHERE source='learned'"):
-            if v not in seen:
-                seen[v] = {"names": {name or "?": 0}, "n": 0, "last": ""}
+        for v, name, at in db.execute("SELECT vat_no, name, at FROM suppliers WHERE source='learned'"):
+            v = re.sub(r"\D", "", str(v or ""))
+            if v in seen or v in sage or v in own or "MINING PRESSURE" in (name or "").upper():
+                continue
+            learned.append({"vat": v, "name": name or "?", "learned": str(at or "")[:10] or None})
         db.close()
     except Exception as e:
         note = f"state.db not read: {e}"
-    missing = sorted(((v, s) for v, s in seen.items() if v not in sage), key=lambda x: -x[1]["n"])
+
+    def row(v, s):
+        return {"vat": v, "invoices": s["n"], "recent": s["recent"], "archive": s["archive"], "latest": s["last"] or None,
+                "scanned": s["scanned"] or None, "name": max(s["names"], key=s["names"].get) if s["names"] else "?"}
+    missing = sorted((row(v, s) for v, s in seen.items() if v not in sage),
+                     key=lambda m: (m["scanned"] or "", m["latest"] or "", m["invoices"]), reverse=True)
     return {
-        "sage_count": len(sage), "sage_list_at": csv_at, "note": note,
+        "sage_count": len(sage), "sage_list_at": csv_at, "note": note, "recent_days": recent_days,
         "checked": sum(s["n"] for s in seen.values()) + sum(no_vat.values()),
-        "missing": [{"vat": v, "invoices": s["n"], "latest": s["last"] or None,
-                     "name": max(s["names"], key=s["names"].get) if s["names"] else "?"} for v, s in missing],
+        "missing": missing,
+        "missing_recent": sum(1 for m in missing if m["recent"]),
+        "learned_only": sorted(learned, key=lambda x: x["learned"] or "", reverse=True),
         "no_vat_total": sum(no_vat.values()),
         "no_vat": [{"name": n, "invoices": c} for n, c in sorted(no_vat.items(), key=lambda x: -x[1])[:60]],
         "at": datetime.now().isoformat(timespec="seconds"),
@@ -2653,7 +2687,7 @@ function renderJob(d,t){
   const rec=ts.flatMap(x=>x.recent||[]).sort((a,b)=>(b.at||"").localeCompare(a.at||"")).slice(0,25);
   $("#jobrecent").innerHTML=recentHtml(rec);
   $("#vatcard").hidden=!t.vat;
-  if(t.vat&&!vatLoaded)loadVat();
+  if(t.vat&&(!vatLoaded||Date.now()-vatLoaded>120000))loadVat();   // again each time the tab opens, if 2+ min old
   const key=t.types.join(",");
   if(key!=outKey){outKey=key;outData={};$("#outq").innerHTML="";loadOut()}
   else renderOut();
@@ -3183,22 +3217,29 @@ $("#tab-train").addEventListener("click",async e=>{
     if(a=="finetune"&&!confirm("Start the full training job? It takes hours and pauses GPU reading while it uses the GPU."))return;
     await act({action:"train_start",job:a,force:!!b.dataset.force,reader:trReader},"Training job started")}
   setTimeout(loadTrain,800)});
-// ---- missing VAT numbers (Supplier Invoices tab): loaded when the tab opens and on Refresh, not every 5 s
-let vatLoaded=false;
+// ---- missing VAT numbers (Supplier Invoices tab): loaded when the tab opens (again if 2+ min old) and on Refresh,
+// not every 5 s. Newest scanned first; suppliers with nothing in the last N days are folded away (Dino 19 Nov).
+let vatLoaded=0;
 async function loadVat(){
-  vatLoaded=true;const b=$("#vatrefresh");b.disabled=true;b.textContent="Checking…";
+  vatLoaded=Date.now();const b=$("#vatrefresh");b.disabled=true;b.textContent="Checking…";
   try{const r=await fetch("/api/missing_vat");if(r.status==401)return location.reload();const v=await r.json();if(v.error)throw new Error(v.error);
     const when=v.sage_list_at?new Date(v.sage_list_at).toLocaleString():"never";
     let h=`<div class="small" style="color:var(--ink)">Sage list: <b>${v.sage_count}</b> usable VAT numbers (updated ${esc(when)}) · invoices checked: <b>${v.checked}</b></div>`;
     if(v.note)h+=`<div class="err">${esc(v.note)}</div>`;
-    h+=v.missing.length?`<div class="small muted" style="margin:6px 0 4px"><b style="color:var(--bad)">Not in Sage (${v.missing.length})</b>: add the VAT number to the supplier in Sage, or fix it if Sage has a different one.</div>
-      <div class="scroll"><table class="vat"><thead><tr><th>VAT no</th><th class="num">Invoices</th><th>Latest</th><th>Supplier as read on the invoice</th></tr></thead><tbody>
-      ${v.missing.map(m=>`<tr><td class="mono">${esc(m.vat)}</td><td class="num">${m.invoices}</td><td class="mono">${esc(m.latest||"-")}</td><td>${esc(m.name)}</td></tr>`).join("")}</tbody></table></div>`
+    const tbl=rows=>`<div class="scroll"><table class="vat"><thead><tr><th>VAT no</th><th class="num">Invoices</th><th class="num">Last ${v.recent_days} days</th><th>Last scanned</th><th>Latest invoice date</th><th>Supplier as read on the invoice</th></tr></thead><tbody>
+      ${rows.map(m=>`<tr><td class="mono">${esc(m.vat)}</td><td class="num">${m.invoices}${m.archive?` <span class="muted small">(${m.archive} archive)</span>`:""}</td><td class="num">${m.recent||""}</td><td class="mono">${esc(m.scanned||"-")}</td><td class="mono">${esc(m.latest||"-")}</td><td>${esc(m.name)}</td></tr>`).join("")}</tbody></table></div>`;
+    const cur=v.missing.filter(m=>m.recent),old=v.missing.filter(m=>!m.recent);
+    h+=v.missing.length?`<div class="small muted" style="margin:6px 0 4px"><b style="color:var(--bad)">Not in Sage, invoices in the last ${v.recent_days} days (${cur.length})</b>: add the VAT number to the supplier in Sage, or fix it if Sage has a different one. Newest scanned first.</div>`
+      +(cur.length?tbl(cur):`<div class="small" style="color:var(--ok)">None: every VAT number on a recent invoice is on the Sage list.</div>`)
+      +(old.length?`<details><summary>Older or archive only: ${old.length} VAT number(s) with no invoice in the last ${v.recent_days} days</summary>${tbl(old)}</details>`:"")
       :`<div class="small" style="margin-top:6px;color:var(--ok)">Every VAT number read on an invoice is on the Sage list.</div>`;
+    if((v.learned_only||[]).length)h+=`<details><summary>Learned by the reader but on no invoice here: ${v.learned_only.length}</summary>
+      <div class="scroll"><table><thead><tr><th>VAT no</th><th>Learned</th><th>Supplier</th></tr></thead><tbody>
+      ${v.learned_only.map(n=>`<tr><td class="mono">${esc(n.vat)}</td><td class="mono">${esc(n.learned||"-")}</td><td>${esc(n.name)}</td></tr>`).join("")}</tbody></table></div></details>`;
     if(v.no_vat.length)h+=`<details><summary>No VAT number read: ${v.no_vat_total} invoice(s) where the supplier can't be identified by VAT (logo-only, foreign, or not read)</summary>
       <div class="scroll"><table><thead><tr><th class="num">Invoices</th><th>Supplier as read</th></tr></thead><tbody>
       ${v.no_vat.map(n=>`<tr><td class="num">${n.invoices}</td><td>${esc(n.name)}</td></tr>`).join("")}</tbody></table></div></details>`;
-    h+=`<div class="small muted" style="margin-top:8px">Checked ${new Date(v.at).toLocaleTimeString()}. The Sage list on the box refreshes after each nightly Sage read once the PC sync runs.</div>`;
+    h+=`<div class="small muted" style="margin-top:8px">Checked ${new Date(v.at).toLocaleString()}. The Sage list on the box refreshes after each nightly Sage read (about 01:10) once the PC sync runs, so a VAT number added in Sage today drops off tomorrow morning.</div>`;
     $("#vat").innerHTML=h;$("#vat").classList.remove("muted","small");}
   catch(e){$("#vat").innerHTML=`<div class="err">Check failed: ${esc(e.message)}</div>`}
   finally{b.disabled=false;b.textContent="Refresh"}}
