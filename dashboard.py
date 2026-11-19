@@ -1966,6 +1966,7 @@ def record_move(root, t, dest, side, pdf, on_hold, category=None, label=None):
 
 
 _ODCATS = {"at": 0.0, "cats": []}
+_MOVE_NAME = threading.Lock()      # 19 Nov: the page sends several moves at once; two must never pick the same free name
 
 
 def od_categories(cfg):
@@ -2012,9 +2013,11 @@ def move_to_od(cfg, root, t, name, js, side, pdf, on_hold, body):
         pdf_name = f"{cat} - {who}{pdf.suffix}"
     else:
         pdf_name = pdf.name
-    new, k = pdf_name, 2
-    while (dest / new).exists() or (dest / (Path(new).stem + ".json")).exists():
-        new, k = f"{Path(pdf_name).stem}_{k}{pdf.suffix}", k + 1
+    with _MOVE_NAME:
+        new, k = pdf_name, 2
+        while (dest / new).exists() or (dest / (Path(new).stem + ".json")).exists() or (dest / (new + ".part")).exists():
+            new, k = f"{Path(pdf_name).stem}_{k}{pdf.suffix}", k + 1
+        (dest / (new + ".part")).touch()                            # the name is taken from here on
     sc = {"schema_version": 1, "doc_id": side.get("doc_id"), "doc_type": "other_doc", "folder": "OtherDocuments", "file": new,
           "source_file": side.get("source_file"), **({"source_folder": side["source_folder"]} if side.get("source_folder") else {}),
           "source_sha256": side.get("source_sha256"), "source_page": side.get("source_page"), "processed_at": side.get("processed_at"),
@@ -2057,9 +2060,11 @@ def move_to_sq(cfg, root, t, name, js, side, pdf, on_hold, body):
                   content_hash=hashlib.sha256(pdf.read_bytes()).hexdigest().upper())
     dest = root / "out" / "SalesQuotes"
     dest.mkdir(parents=True, exist_ok=True)
-    new, k = pdf.name, 2
-    while (dest / new).exists() or (dest / (Path(new).stem + ".json")).exists():
-        new, k = f"{pdf.stem}_{k}{pdf.suffix}", k + 1
+    with _MOVE_NAME:
+        new, k = pdf.name, 2
+        while (dest / new).exists() or (dest / (Path(new).stem + ".json")).exists() or (dest / (new + ".part")).exists():
+            new, k = f"{pdf.stem}_{k}{pdf.suffix}", k + 1
+        (dest / (new + ".part")).touch()                            # the name is taken from here on
     sc = {"schema_version": 1, "doc_id": side.get("doc_id"), "doc_type": "sales_quote", "folder": "SalesQuotes", "file": new,
           "source_file": side.get("source_file"), **({"source_folder": side["source_folder"]} if side.get("source_folder") else {}),
           "source_sha256": side.get("source_sha256"), "source_page": side.get("source_page"), "processed_at": side.get("processed_at"),
@@ -2110,15 +2115,16 @@ def reroute_doc(cfg, root, t, body):
     meta_dir.mkdir(parents=True, exist_ok=True)
     stem = re.sub(r'[\\/:*?"<>|#%]+', " ", Path(src).stem)[:120].strip() or pdf.stem
     base = stem + (f"_p{side['source_page']}" if side.get("source_page") else "")
-    name_in, k = base + ".pdf", 2
-    while (indir / name_in).exists() or (meta_dir / (name_in + ".json")).exists():
-        name_in, k = f"{base}_{k}.pdf", k + 1
     stamp = datetime.now().isoformat(timespec="seconds")
     meta = {"original_name": src, "rerouted_from": f"out/{t}/{'hold/' if on_hold else ''}{name} (dashboard)", "routed_at": stamp, "routed_by": "dashboard"}
     for key in ("source_folder", "source_modified"):
         if side.get(key):
             meta[key] = side[key]
-    (meta_dir / (name_in + ".json")).write_text(json.dumps(meta, indent=1), encoding="utf-8")   # the note before the PDF
+    with _MOVE_NAME:                                                # the note takes the name; the PDF follows
+        name_in, k = base + ".pdf", 2
+        while (indir / name_in).exists() or (meta_dir / (name_in + ".json")).exists():
+            name_in, k = f"{base}_{k}.pdf", k + 1
+        (meta_dir / (name_in + ".json")).write_text(json.dumps(meta, indent=1), encoding="utf-8")   # the note before the PDF
     shutil.copy2(pdf, indir / (name_in + ".part"))                                             # the worker skips .part
     os.replace(indir / (name_in + ".part"), indir / name_in)
     record_move(root, t, dest, side, pdf, on_hold, None, body.get("label"))   # 341: a label for the pre-sort
@@ -2556,7 +2562,15 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}th.num{text-align:righ
 pre{margin:0;max-height:380px;overflow:auto;font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
 select{font:inherit;padding:5px 8px;border-radius:7px;border:1px solid var(--line);background:var(--chip);color:var(--ink)}
 .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:8px;font-size:13px;opacity:0;transition:.2s;pointer-events:none}
-.toast.show{opacity:1}
+.toast.show{opacity:1}.toast.act{pointer-events:auto}
+.toast button{margin:0 0 0 12px;width:auto;font:inherit;padding:2px 10px;border-radius:6px;border:1px solid currentColor;background:transparent;color:inherit;cursor:pointer}
+/* quick delete / move (19 Nov): tick boxes, the current row, the bar for the ticked rows */
+table.q input.sel{width:16px;height:16px;margin:0 7px 0 0;padding:0;vertical-align:-3px;cursor:pointer}
+table.q tr.doc.picked td{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+table.q tr.doc.cur td{box-shadow:inset 0 2px 0 var(--accent),inset 0 -2px 0 var(--accent)}
+.bulk{position:fixed;left:50%;bottom:58px;transform:translateX(-50%);z-index:30;display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:calc(100vw - 24px);
+  background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:8px 12px;box-shadow:0 6px 24px rgba(0,0,0,.28);font-size:13px}
+.bulk[hidden]{display:none}
 .scroll{overflow-x:auto}
 @media (max-width:640px){.hide-sm{display:none}}
 /* 336: column widths set by dragging a heading edge */
@@ -2611,6 +2625,7 @@ table.q th .rz:hover,table.q th .rz.on{background:var(--accent);opacity:.35}
 <section class="grid" style="grid-template-columns:repeat(auto-fit,minmax(460px,1fr))">
 <div class="card" id="tracc"></div><div class="card" id="trrep"></div></section>
 </main>
+<div class="bulk" id="bulk" hidden></div>
 <div class="toast" id="toast"></div>
 <aside id="pv" hidden><div class="pvbar"><span class="small" id="pvname">Click a document to see its first page</span><a class="btn" id="pvpdf" target="_blank" rel="noopener" hidden>Whole PDF</a><button id="pvclose" title="Close the preview">✕</button></div><div class="pvbody"><img id="pvimg" alt=""></div></aside>
 <script>
@@ -2618,7 +2633,9 @@ const CSRF="__CSRF__";
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let busy=false,last=null;
-function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("show");clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("show"),2600)}
+function toast(m,undo,ms){const t=$("#toast");t.textContent=m;t.classList.toggle("act",!!undo);
+  if(undo){const b=document.createElement("button");b.textContent="Undo (Z)";b.onclick=()=>undo();t.appendChild(b)}
+  t.classList.add("show");clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("show","act"),ms||2600)}
 // PC sync v34 (28 Oct): "running" + "current" while it works, "recent" = the last files synced / failed
 function syncNow(sy,stale){
   const c=sy.current,rec=Array.isArray(sy.recent)?sy.recent:[];let h="";
@@ -2783,7 +2800,7 @@ function renderTabs(d){
   if(tab=="train"){if(!trTimer)loadTrain()}
   else if(tab!="overview")renderJob(d,cur);
 }
-function go(id){tab=id;history.replaceState(null,"","#"+id);tabsKey="";if(last)renderTabs(last);window.scrollTo(0,0)}
+function go(id){tab=id;sel.clear();cur=null;bulkBar();history.replaceState(null,"","#"+id);tabsKey="";if(last)renderTabs(last);window.scrollTo(0,0)}
 window.addEventListener("hashchange",()=>{const h=location.hash.slice(1)||"overview";if(h!=tab)go(h)});
 function stat(n,label,bad){return `<div class="stat"><b style="${bad&&n?"color:var(--bad)":""}">${n}</b><span>${label}</span></div>`}
 function renderJob(d,t){
@@ -2812,13 +2829,15 @@ const outSort={},outCheck={},outScrollReset=new Set();      // "<type>|r" / "<ty
 async function loadOut(auto){
   const again=()=>{clearTimeout(outTimer);outTimer=setTimeout(()=>{if(tab!="overview")loadOut(true)},10000)};
   if(auto&&document.hidden)return again();
-  const types=outKey?outKey.split(","):[];
+  const types=outKey?outKey.split(","):[],started=Date.now();
   try{const got=await Promise.all(types.map(async t=>{const sr=outSort[t+"|r"],sh=outSort[t+"|h"];     // both queues of a tab at once
     const qs=(sr?`&sort=${encodeURIComponent(sr.k)}&dir=${sr.d}`:"")+(sh?`&hsort=${encodeURIComponent(sh.k)}&hdir=${sh.d}`:"")+(outCheck[t]?"&check="+encodeURIComponent(outCheck[t]):"");
     const r=await fetch("/api/out?type="+encodeURIComponent(t)+qs);if(r.status==401){location.reload();throw new Error("login")}return [t,await r.json()]}));
     for(const [t,j] of got){outData[t]=j;if(j.writers)WRITERS=j.writers;if(j.route_to)ROUTE=j.route_to;if(j.route_types)RTYPES=j.route_types;if(j.units)UNITS=j.units}}
   catch(e){}
-  renderOut(false,auto);again()}
+  for(const [id,g] of gone)if(g.s=="done"&&g.at<started)gone.delete(id);     // listed again without them by now
+  for(const id of [...sel])if(!docOf(id))sel.delete(id);
+  renderOut(false,auto);if(!document.activeElement||!document.activeElement.closest("#bulk"))bulkBar();again()}
 const COLS={supplier_invoice:[["Supplier","supplier_name"],["Invoice","invoice_number",0,1],["Date","invoice_date"],["Total","total",1]],
   po:[["Order no","order_number",0,1],["Supplier","supplier"],["Document type","library_doc_type",0,0,"wrap"],["Method","order_method"],["Att of","att_of"],["Date","date"],
     ["Allocation","allocation"],["Job","job_number"],["Other PO ref","other_po_ref"],["Quote ref","quote_ref"],
@@ -3062,6 +3081,105 @@ function spHtml(x,q){
   const sql=p.sql?`<div class="small muted" style="margin-top:6px">SQL: MPSDocs.dbo.${esc(p.sql.table)} + ${x.item_count} line${x.item_count==1?"":"s"} in ${esc(p.sql.lines_table)}</div>`
     :p.skip_sql?`<div class="small muted" style="margin-top:6px">Not recorded in SQL (no MPSDocs table for this type yet).</div>`:"";
   return `<div class="sec">SharePoint</div><div class="sp"><div class="path">${dest}</div>${cols}${ln}${sql}</div>`}
+// ---- quick delete / move (Dino 19 Nov). The row goes at once and the request runs behind it; Undo for a few seconds
+// (nothing is sent until then). Several rows at a time with the tick boxes; keys for the current row.
+const gone=new Map(),sel=new Set(),qWait={fast:[],slow:[]},qRun={fast:0,slow:0},QMAX={fast:3,slow:1},UNDO_MS=6000;
+let cur=null,selAnchor=null,pend=null,qErr=[],qOk=0;
+const idOf=(t,held,name)=>t+"|"+(held?"h|":"r|")+name;
+const idParts=id=>{const [t,hr,...rest]=id.split("|");return {t,held:hr=="h",name:rest.join("|")}};
+const docOf=id=>{const p=idParts(id),q=outData[p.t];return q&&(p.held?q.held:q.ready).find(d=>d.name==p.name)};
+const listIds=(t,held)=>{const q=outData[t];return q?(held?q.held:q.ready).map(x=>idOf(t,held,x.name)).filter(i=>!gone.has(i)):[]};
+const visIds=()=>[...$("#outq").querySelectorAll("tr.doc")].filter(r=>r.offsetParent!==null).map(r=>r.dataset.open);
+const redraw=()=>renderOut(!editing);
+const qBusy=()=>qRun.fast+qRun.slow+qWait.fast.length+qWait.slow.length>0;
+function setCur(id){cur=id;redraw();if(!id)return;
+  const r=[...$("#outq").querySelectorAll("tr.doc")].find(x=>x.dataset.open==id);if(r)r.scrollIntoView({block:"nearest"});
+  const p=idParts(id);pvShow(p.t,docOf(id),p.held)}
+function quick(jobs,what){
+  if(!jobs.length)return;
+  commitPend();
+  const hide=new Set(jobs.map(j=>j.id)),v=visIds(),i=v.indexOf(cur);
+  let next=cur;if(hide.has(cur))next=v.slice(i+1).find(x=>!hide.has(x))||v.slice(0,Math.max(i,0)).reverse().find(x=>!hide.has(x))||null;
+  jobs.forEach(j=>{gone.set(j.id,{s:"wait"});sel.delete(j.id);outOpen.delete(j.id)});
+  pend={jobs,h:setTimeout(commitPend,UNDO_MS)};
+  bulkBar();setCur(next);
+  toast(what+" "+(jobs.length>1?jobs.length+" documents":jobs[0].name.replace(/\.json$/i,""))+(jobs[0].lane=="slow"?" (read in the background)":""),undoPend,UNDO_MS)}
+function undoPend(){if(!pend)return;clearTimeout(pend.h);const js=pend.jobs;pend=null;js.forEach(j=>gone.delete(j.id));
+  renderOut(true);toast(js.length>1?"Put back "+js.length+" documents":"Put back");setCur(js[0].id)}
+function commitPend(){if(!pend)return;clearTimeout(pend.h);const js=pend.jobs;pend=null;js.forEach(j=>{gone.set(j.id,{s:"run"});qWait[j.lane].push(j)});pump()}
+function pump(){for(const lane of ["fast","slow"])while(qRun[lane]<QMAX[lane]&&qWait[lane].length){const j=qWait[lane].shift();qRun[lane]++;
+  send(j).finally(()=>{qRun[lane]--;pump();if(!qBusy())drained()})}}
+async function send(j,keepalive){
+  try{const r=await fetch("/api/action",{method:"POST",keepalive:!!keepalive,headers:{"Content-Type":"application/json","X-CSRF":CSRF},body:JSON.stringify(j.body)});
+    if(r.status==401)return location.reload();
+    const x=await r.json();if(!x.ok)throw new Error(x.error||"failed");
+    if(j.hide)gone.set(j.id,{s:"done",at:Date.now()});qOk++}
+  catch(e){gone.delete(j.id);qErr.push(j.name.replace(/\.json$/i,"")+": "+e.message)}}
+function drained(){
+  if(qErr.length)toast("Not done: "+qErr[0]+(qErr.length>1?" (and "+(qErr.length-1)+" more)":""),null,9000);
+  else if(!pend&&qOk>1)toast(qOk+" documents done");
+  qErr=[];qOk=0;loadOut();refresh()}
+function delDocs(ids,why){
+  if(editing)return toast("Save or cancel the edit first");
+  quick(ids.map(id=>{const p=idParts(id);return {id,name:p.name,lane:"fast",hide:1,body:{action:"delete",type:p.t,name:p.name,held:p.held,...(why?{why}:{})}}}),"Deleted")}
+function moveDocs(ids,r){                         // r: one of RTYPES (464)
+  if(editing)return toast("Save or cancel the edit first");
+  if(r.dest=="delete")return delDocs(ids,r.type);
+  ids=ids.filter(id=>idParts(id).t!=r.dest);if(!ids.length)return toast("Already in that queue");
+  const one=ids.length==1?idParts(ids[0]).name:ids.length+" documents";let cat=null,person=null;
+  if(r.dest=="OtherDocuments"){const cats=(ROUTE.find(x=>x.type=="OtherDocuments")||{}).categories||[];
+    if(r.category=="?"){cat=(prompt("Move "+one+" to Other Documents.\nCategory (its folder in the library) - in use: "+cats.join(", "),cats[0]||"")||"").trim();if(!cat)return}
+    else if(String(r.category).startsWith("name:")){if(ids.length>1)return toast(r.label+": one at a time (each is named after its person)");
+      cat=r.category.slice(5);person=(prompt(r.label+": whose is it? (the document is named after the person, in Other Documents / "+cat+")","")||"").trim();if(!person)return}
+    else cat=r.category}
+  const slow=r.dest=="OtherDocuments"||r.dest=="SalesQuotes";      // these wait for the model (a summary / the quote read)
+  quick(ids.map(id=>{const p=idParts(id);return {id,name:p.name,lane:slow?"slow":"fast",hide:1,
+    body:{action:"reroute",type:p.t,name:p.name,held:p.held,dest:r.dest,category:cat,person,label:r.type}}}),
+    "Moved to "+(r.dest=="OtherDocuments"?"Other Documents / "+cat:r.dest=="SalesQuotes"?"Sales Quotes":r.label)+":")}
+function holdDocs(ids){                           // ready ones go on hold, held ones are released
+  if(editing)return toast("Save or cancel the edit first");
+  const js=ids.map(id=>{const p=idParts(id);return {id,name:p.name,lane:"fast",hide:1,body:{action:p.held?"release":"hold",type:p.t,name:p.name}}});
+  if(!js.length)return;
+  js.forEach(j=>{gone.set(j.id,{s:"run"});sel.delete(j.id);qWait.fast.push(j)});
+  if(js.some(j=>j.id==cur)){const hide=new Set(js.map(j=>j.id)),v=visIds(),i=v.indexOf(cur);cur=v.slice(i+1).find(x=>!hide.has(x))||null}
+  bulkBar();setCur(cur);pump()}
+function bulkBar(){
+  const b=$("#bulk"),ids=[...sel].filter(id=>!gone.has(id));
+  if(!ids.length||tab=="overview"||tab=="train"){b.hidden=true;b.innerHTML="";return}
+  const nh=ids.filter(i=>idParts(i).held).length,nr=ids.length-nh;
+  b.hidden=false;b.innerHTML=`<b>${ids.length} ticked</b><button class="danger" data-b="delete">Delete</button>`
+    +(RTYPES.length?`<select data-b="move" title="Move the ticked documents"><option value="">Move to…</option>${moveOpts(idParts(ids[0]).t)}</select>`:"")
+    +(nr?`<button data-b="hold">Hold${nh?" "+nr:""}</button>`:"")+(nh?`<button data-b="release">Release${nr?" "+nh:""}</button>`:"")+`<button data-b="clear">Clear (Esc)</button>`}
+$("#bulk").addEventListener("click",e=>{const b=e.target.closest("button[data-b]");if(!b)return;const a=b.dataset.b,ids=[...sel].filter(i=>!gone.has(i));
+  if(a=="clear"){sel.clear();redraw();return bulkBar()}
+  if(a=="delete")return delDocs(ids);
+  holdDocs(ids.filter(i=>idParts(i).held==(a=="release")))});
+$("#bulk").addEventListener("change",e=>{const s=e.target.closest("select[data-b=move]");if(!s||!s.value)return;
+  const r=RTYPES.find(x=>x.key==s.value);s.value="";s.blur();if(r)moveDocs([...sel].filter(i=>!gone.has(i)),r)});
+document.addEventListener("keydown",e=>{
+  if(tab=="overview"||tab=="train"||editing||e.metaKey||e.altKey||e.ctrlKey)return;
+  const el=document.activeElement;if(el&&el.matches("input:not([type=checkbox]),textarea,select,[contenteditable]"))return;
+  const k=e.key.length==1?e.key.toLowerCase():e.key;
+  if(el&&el.matches("button,a,summary")&&(k==" "||k=="Enter"))return;
+  if(k=="z"&&pend){e.preventDefault();return undoPend()}
+  const v=visIds();if(!v.length)return;
+  const here=cur&&v.includes(cur),step=d=>{const i=v.indexOf(cur);setCur(v[i<0?(d>0?0:v.length-1):Math.max(0,Math.min(v.length-1,i+d))])};
+  if(k=="j"||(k=="ArrowDown"&&here)){e.preventDefault();return step(1)}
+  if(k=="k"||(k=="ArrowUp"&&here)){e.preventDefault();return step(-1)}
+  if(k=="Escape"&&sel.size){sel.clear();redraw();return bulkBar()}
+  if(!here&&!sel.size)return;
+  const ids=sel.size?[...sel].filter(i=>!gone.has(i)):[cur];
+  if(k=="Delete"){e.preventDefault();return delDocs(ids)}
+  if(k=="h"){e.preventDefault();return holdDocs(ids)}
+  if(k=="m"){e.preventDefault();const s=sel.size?$("#bulk select[data-b=move]"):$("#outq tr.doc.cur select.route");
+    if(s){s.focus();try{s.showPicker()}catch(_){}}return}
+  if(!here)return;
+  if(k=="x"||k==" "){e.preventDefault();sel.has(cur)?sel.delete(cur):sel.add(cur);selAnchor=cur;redraw();return bulkBar()}
+  if(k=="Enter"){e.preventDefault();outOpen.has(cur)?outOpen.delete(cur):outOpen.add(cur);redraw()}});
+// leaving the page: what is still waiting for its Undo, or queued, is sent on the way out
+addEventListener("pagehide",()=>{if(pend){clearTimeout(pend.h);pend.jobs.forEach(j=>send(j,true));pend=null}
+  for(const lane of ["fast","slow"])qWait[lane].splice(0).forEach(j=>send(j,true))});
+addEventListener("beforeunload",e=>{if(qWait.slow.length+qRun.slow>0){e.preventDefault();e.returnValue=""}});
 function moveOpts(t){         // 464: by document type (labels.xlsx Types), grouped by where it goes
   const lbl=d=>d=="OtherDocuments"?"Other Documents":d=="SalesQuotes"?"Sales Quotes":d=="delete"?"Delete":((ROUTE.find(r=>r.type==d)||{}).label||d);
   const groups=[];RTYPES.forEach(r=>{if(r.dest==t)return;const g=r.dest=="OtherDocuments"||r.dest=="SalesQuotes"||r.dest=="delete"?lbl(r.dest):"Queues (read again)";
@@ -3069,17 +3187,18 @@ function moveOpts(t){         // 464: by document type (labels.xlsx Types), grou
   return groups.map(G=>`<optgroup label="${esc(G.g)}">${G.o.map(r=>`<option value="${esc(r.key)}">${esc(r.label)}${G.g=="Queues (read again)"?" → "+esc(lbl(r.dest)):""}</option>`).join("")}</optgroup>`).join("")}
 function docRows(t,list,held){
   const cols=COLS[DT[t]]||COLS.supplier_invoice;
-  return list.map(x=>{const f=x.fields||{},id=t+"|"+(held?"h|":"r|")+x.name,open=outOpen.has(id);
+  return list.filter(x=>!gone.has(idOf(t,held,x.name))).map(x=>{const f=x.fields||{},id=idOf(t,held,x.name),open=outOpen.has(id);
+    const box=`<input type="checkbox" class="sel" data-id="${esc(id)}" ${sel.has(id)?"checked":""} title="Tick to delete, move, hold or release several at once (Shift-click ticks a range)">`;
     const pdf=x.pdf?`<a class="btn" target="_blank" rel="noopener" href="/api/preview?type=${encodeURIComponent(t)}&name=${encodeURIComponent(x.file)}${held?"&held=1":""}" onclick="event.stopPropagation()" title="First page as an image, in a new tab (the whole PDF: Whole PDF in the preview pane)">Image</a>`:"";
     const btn=`<button data-act="${held?"release":"hold"}" data-type="${esc(t)}" data-name="${esc(x.name)}">${held?"Release":"Hold"}</button>`
-      +` <button class="danger" data-act="delete" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" title="Take it out of the pipeline (kept in pipeline/deleted for recovery)">Delete</button>`
+      +` <button class="danger" data-act="delete" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" title="Take it out of the pipeline at once (Undo for a few seconds; after that it is kept in pipeline/deleted)">Delete</button>`
       +(RTYPES.length?` <select class="route" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" onclick="event.stopPropagation()" title="Wrong kind of document? Choose what it is: it goes to that queue and is read again there (or to Other Documents / Sales Quotes)"><option value="">Move to…</option>${moveOpts(t)}</select>`
        :ROUTE.length?` <select class="route" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" onclick="event.stopPropagation()" title="Wrong kind of document? Send it to the right queue: that queue's reader reads it again"><option value="">Move to…</option>${ROUTE.filter(r=>r.type!=t).map(r=>`<option value="${esc(r.type)}">${esc(r.label)}</option>`).join("")}</select>`:"");
     const fv=k=>k=="_folder"?x.source_folder:k=="_hold"?(HOLD[x.hold_reason]||x.hold_reason):f[k]??f[ALIAS[k]];
     const cell=(k,n,isId,kind)=>kind=="copy"?(f.jt_copy?`<span class="tag jtc jtc-${esc(f.jt_copy)}" title="${esc(f.jt_copy_how||"")}">${esc(f.jt_copy)}</span>`:"")
       :kind=="tick"?`<input type="checkbox" class="tick" title="Tick once you have checked this document against the PDF (fills Checked in SharePoint where the library has the column)" data-type="${esc(t)}" data-name="${esc(x.name)}" data-held="${held?1:0}" ${f.checked?"checked":""}>`
       :n?esc(money(fv(k))):typeof fv(k)=="boolean"?(fv(k)?"Yes":""):(fv(k)!=null&&fv(k)!=="")?esc(fv(k)):isId?`<span class="muted" title="no number read; file name shown">${esc((x.file||x.name).replace(/\.(pdf|json)$/i,""))}</span>`:"";
-    let r=`<tr class="doc" data-open="${esc(id)}">${cols.map(([l,k,n,isId,kind])=>`<td class="${n?"num":""}${kind=="wrap"?" wrap":""}${kind=="tick"?" tickc":""}">${cell(k,n,isId,kind)}</td>`).join("")}
+    let r=`<tr class="doc${cur==id?" cur":""}${sel.has(id)?" picked":""}" data-open="${esc(id)}">${cols.map(([l,k,n,isId,kind],ci)=>`<td class="${n?"num":""}${kind=="wrap"?" wrap":""}${kind=="tick"?" tickc":""}">${ci?"":box}${cell(k,n,isId,kind)}</td>`).join("")}
       <td class="num">${x.item_count}</td><td class="chk">${checks(x)}</td><td class="act">${pdf} ${btn}</td></tr>`;
     if(open){
       const q0=null,ed=editing==id;
@@ -3121,15 +3240,16 @@ function renderOut(force,auto){
 }
 function outSection(d,t){
     const ty=d.types.find(x=>x.type==t),q=outData[t];if(!ty)return "";
-    const cols=COLS[DT[t]]||COLS.supplier_invoice,n=q?q.ready_total:ty.awaiting_sync;
+    const hid=h=>q?(h?q.held:q.ready).filter(x=>gone.has(idOf(t,h,x.name))).length:0;
+    const cols=COLS[DT[t]]||COLS.supplier_invoice,n=q?q.ready_total-hid(false):ty.awaiting_sync;
     const can=d.sync_all_on&&ty.sync_on&&!ty.sync_running&&!ty.sync_requested&&n>0;
     const cw=COLW[t]||{},W=k=>cw[k]?` style="width:${cw[k]}px;min-width:${cw[k]}px;max-width:${cw[k]}px"`:"",
       RZ=k=>`<span class="rz" title="Drag to change the width; double-click for automatic widths"></span>`,
       tfix=Object.keys(cw).length?` fixed" style="width:${Object.values(cw).reduce((a,b)=>a+b,0)}px`:"";
-    const head=lk=>{const so=outSort[t+"|"+lk],th=(l,k,num)=>{const on=so&&so.k==k;
-        return `<th class="${num?"num":""} sortable${on?" sorted":""}" data-col="${esc(k)}" data-sort="${esc(k)}" data-list="${lk}" data-type="${esc(t)}"${W(k)} title="Sort by ${esc(l)}${on?" (click again to reverse)":""}">${l}${on?(so.d=="desc"?" ▼":" ▲"):""}${RZ(k)}</th>`};
-      return `<tr>${cols.map(([l,k,num])=>th(l,k,num)).join("")}${th("Lines","_lines",1)}<th data-col="_checks"${W("_checks")}>Checks${RZ("_checks")}</th><th data-col="_act"${W("_act")}>${RZ("_act")}</th></tr>`};
-    return `<section class="card"><div class="qhead"><h2>Out queue: ${esc(ty.label)} (${n} ready${q&&q.held_total?`, ${q.held_total} on hold`:""})</h2>
+    const head=lk=>{const so=outSort[t+"|"+lk],ids=listIds(t,lk=="h"),th=(l,k,num,first)=>{const on=so&&so.k==k;
+        return `<th class="${num?"num":""} sortable${on?" sorted":""}" data-col="${esc(k)}" data-sort="${esc(k)}" data-list="${lk}" data-type="${esc(t)}"${W(k)} title="Sort by ${esc(l)}${on?" (click again to reverse)":""}">${first?`<input type="checkbox" class="sel" data-all="${lk}" data-type="${esc(t)}" ${ids.length&&ids.every(i=>sel.has(i))?"checked":""} title="Tick all ${ids.length} shown">`:""}${l}${on?(so.d=="desc"?" ▼":" ▲"):""}${RZ(k)}</th>`};
+      return `<tr>${cols.map(([l,k,num],ci)=>th(l,k,num,!ci)).join("")}${th("Lines","_lines",1)}<th data-col="_checks"${W("_checks")}>Checks${RZ("_checks")}</th><th data-col="_act"${W("_act")}>${RZ("_act")}</th></tr>`};
+    return `<section class="card"><div class="qhead"><h2>Out queue: ${esc(ty.label)} (${n} ready${q&&q.held_total?`, ${q.held_total-hid(true)} on hold`:""})</h2>
       ${q&&q.ready.length?`<button data-act="expand" data-type="${esc(t)}">${q.ready.every(x=>outOpen.has(t+"|r|"+x.name))?"Collapse all":"Expand all"}</button>`:""}
       ${Object.keys(cw).length?`<button data-act="resetw" data-type="${esc(t)}" title="Automatic column widths again">Reset widths</button>`:""}
       ${q&&q.checks?(()=>{const m=new Map();for(const l of ["ready","held"])for(const [k,n] of (q.checks[l]||[]))m.set(k,(m.get(k)||0)+n);
@@ -3146,15 +3266,24 @@ function outSection(d,t){
         :`<div class="small muted">Nothing waiting to sync.</div>`}
       ${q&&q.held.length?`<details ${outOpen.has("held|"+t)?"open":""} data-held="${esc(t)}"><summary>On hold (${q.held_total}): skipped by Sync now until released${q.held_total>q.held.length?` · showing the ${outSort[t+"|h"]?"first":"oldest"} ${q.held.length}`:""}</summary>
         <div class="scroll qscroll" data-qs="${esc(t)}|h"><table class="q${tfix}" data-type="${esc(t)}"><thead>${head("h")}</thead><tbody>${docRows(t,q.held,true)}</tbody></table></div></details>`:""}
-      <div class="small muted" style="margin-top:8px">Click a row to see what goes to SharePoint and SQL, with its line items. Hold keeps a document back from the next sync. Move to… sends a document to the right queue, where it is read again.</div></section>`}
+      <div class="small muted" style="margin-top:8px">Click a row to see what goes to SharePoint and SQL, with its line items. Hold keeps a document back from the next sync. Move to… sends a document to the right queue, where it is read again.
+        Delete and Move to… act at once, with Undo for a few seconds. Tick rows to do several together. Keys: J / K next / previous row, Del delete, M move, H hold or release, X tick, Enter open, Z undo.</div></section>`}
 $("#outq").addEventListener("click",e=>{
-  const h=e.target.closest("th[data-sort]");if(!h)return;
+  const h=e.target.closest("th[data-sort]");if(!h||e.target.closest("input.sel"))return;
   if(e.target.closest(".rz")||Date.now()-(window.__rzUp||0)<400){e.stopPropagation();return}   // a resize, not a sort
   e.stopPropagation();if(editing){toast("Save or cancel the edit first");return}
   const key=h.dataset.type+"|"+h.dataset.list,cur=outSort[key];
   outScrollReset.add(key);outSort[key]=cur&&cur.k==h.dataset.sort?{k:cur.k,d:cur.d=="asc"?"desc":"asc"}:{k:h.dataset.sort,d:"asc"};
   loadOut()},true);
 $("#outq").addEventListener("click",async e=>{
+  const sb=e.target.closest("input.sel");
+  if(sb){e.stopPropagation();
+    if(sb.dataset.all){const on=sb.checked;listIds(sb.dataset.type,sb.dataset.all=="h").forEach(i=>on?sel.add(i):sel.delete(i))}
+    else{const id=sb.dataset.id,v=visIds(),a=v.indexOf(selAnchor),z=v.indexOf(id);
+      if(e.shiftKey&&a>=0&&z>=0)v.slice(Math.min(a,z),Math.max(a,z)+1).forEach(i=>sel.add(i));
+      else sb.checked?sel.add(id):sel.delete(id);
+      selAnchor=id}
+    redraw();bulkBar();return}
   const tk=e.target.closest("input.tick");
   if(tk){e.stopPropagation();tk.disabled=true;
     await act({action:"check",type:tk.dataset.type,name:tk.dataset.name,held:tk.dataset.held=="1",value:tk.checked},tk.checked?"Ticked as checked":"Tick removed");
@@ -3184,9 +3313,7 @@ $("#outq").addEventListener("click",async e=>{
       await act({action:"edit",type:box.dataset.type,name:box.dataset.name,held:box.dataset.held=="1",fields,items,heats},j=>j.changed===0?"Nothing to save: no change was picked up":"Saved");   // 665
       editing=null;await loadOut();return}
   }
-  if(b&&b.dataset.act=="delete"){e.stopPropagation();
-    if(!confirm("Delete "+b.dataset.name+(b.dataset.held=="1"?" (on hold)":" (ready to sync)")+" from the pipeline?\n\nIt won't be synced. It is kept in pipeline/deleted, so it can be recovered."))return;
-    b.disabled=true;await act({action:"delete",type:b.dataset.type,name:b.dataset.name,held:b.dataset.held=="1"},"Deleted");loadOut();return}
+  if(b&&b.dataset.act=="delete"){e.stopPropagation();delDocs([idOf(b.dataset.type,b.dataset.held=="1",b.dataset.name)]);return}
   if(b){e.stopPropagation();const a=b.dataset.act,t=b.dataset.type;
     if(a=="resetw"){delete COLW[t];saveColw();renderOut(true);return}
     if(a=="clearchk"){delete outCheck[t];loadOut();return}
@@ -3194,7 +3321,7 @@ $("#outq").addEventListener("click",async e=>{
       ids.forEach(i=>all?outOpen.delete(i):outOpen.add(i));renderOut();return}
     if(a=="sync_now"&&!confirm("Upload everything in the "+t+" out queue to SharePoint and SQL?"))return;
     b.disabled=true;await act({action:a,type:t,name:b.dataset.name},{sync_now:"Sync requested",cancel_sync:"Request cancelled",hold:"On hold",release:"Released"}[a]);loadOut();return}
-  const r=e.target.closest("tr.doc");if(r){const id=r.dataset.open;
+  const r=e.target.closest("tr.doc");if(r){const id=r.dataset.open;cur=id;
     {const [pt,hr,...rest]=id.split("|"),nm=rest.join("|"),ph=hr=="h",pq=outData[pt];pvShow(pt,pq&&(ph?pq.held:pq.ready).find(d=>d.name==nm),ph)}
     outOpen.has(id)?outOpen.delete(id):outOpen.add(id);renderOut()}});
 $("#outq").addEventListener("change",async e=>{
@@ -3202,21 +3329,8 @@ $("#outq").addEventListener("change",async e=>{
   if(cf){const t=cf.dataset.type;cf.value?outCheck[t]=cf.value:delete outCheck[t];outScrollReset.add(t+"|r");outScrollReset.add(t+"|h");
     if(cf.value)outOpen.add("held|"+t);cf.blur();loadOut();return}
   const rs=e.target.closest("select.route");
-  if(rs&&rs.value.includes("|")){const r=RTYPES.find(x=>x.key==rs.value),nm=rs.dataset.name,held=rs.dataset.held=="1";   // 464: by type
-    const back=()=>{rs.value="";rs.blur()};if(!r)return back();
-    if(r.dest=="delete"){if(!confirm("Delete "+nm+" from the pipeline? ("+r.label+")\n\nIt won't be synced. It is kept in pipeline/deleted, so it can be recovered."))return back();
-      rs.disabled=true;await act({action:"delete",type:rs.dataset.type,name:nm,held,why:r.type},"Deleted");rs.blur();loadOut();return}
-    let cat=null,person=null;
-    if(r.dest=="OtherDocuments"){const cats=(ROUTE.find(x=>x.type=="OtherDocuments")||{}).categories||[];
-      if(r.category=="?"){cat=(prompt("Move "+nm+" to Other Documents.\nCategory (its folder in the library) - in use: "+cats.join(", "),cats[0]||"")||"").trim();if(!cat)return back()}
-      else if(String(r.category).startsWith("name:")){cat=r.category.slice(5);person=(prompt(r.label+": whose is it? (the document is named after the person, in Other Documents / "+cat+")","")||"").trim();if(!person)return back()}
-      else{cat=r.category;if(!confirm("Move "+nm+" to Other Documents / "+cat+" ("+r.label+")?"))return back()}
-      toast("Summarising it for Other Documents (up to a minute or so)…")}
-    else if(r.dest=="SalesQuotes"){if(!confirm("Move "+nm+" to Sales Quotes? It is read as a quote; this copy goes to pipeline/deleted."))return back();toast("Reading the quote (up to two minutes)…")}
-    else if(!confirm("Move "+nm+" to "+r.label+"? It is read again there; this copy goes to pipeline/deleted."))return back();
-    rs.disabled=true;await act({action:"reroute",type:rs.dataset.type,name:nm,held,dest:r.dest,category:cat,person,label:r.type},
-      r.dest=="OtherDocuments"?"Moved to Other Documents ("+cat+")":r.dest=="SalesQuotes"?"Moved to Sales Quotes":"Moved: it will be read again as "+r.label);
-    rs.blur();loadOut();return}
+  if(rs&&rs.value.includes("|")){const r=RTYPES.find(x=>x.key==rs.value),id=idOf(rs.dataset.type,rs.dataset.held=="1",rs.dataset.name);   // 464: by type
+    rs.value="";rs.blur();if(r)moveDocs([id],r);return}
   if(rs){const to=rs.value;if(!to)return;const lbl=rs.options[rs.selectedIndex].text;
     let cat=null;
     if(to=="OtherDocuments"){const cats=(ROUTE.find(r=>r.type==to)||{}).categories||[];
