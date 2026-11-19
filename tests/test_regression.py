@@ -21,7 +21,7 @@ except Exception:                          # pragma: no cover
     SKIP = True
 
 
-def test_hashes(n):
+def hashes_in_test_split(n):        # not named test_*: pytest took it for a test and failed on its argument
     """Content hashes that land in the TEST split (training.is_test)."""
     out, i = [], 0
     while len(out) < n:
@@ -36,7 +36,7 @@ def test_hashes(n):
 class RegressionEndToEnd(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
-        hs = test_hashes(4)
+        hs = hashes_in_test_split(4)
         po = {"order_number": "A12345", "supplier": "Acme Steel", "date": "2026-11-01", "checked": True,
               "items": [{"description": "PIPE 100NB", "quantity": 2, "unit_price": 10}]}
         dn = {"dn_number": "IN123", "date": "2026-11-02", "checked": True}
