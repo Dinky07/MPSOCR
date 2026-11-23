@@ -304,6 +304,7 @@ def watch(day, deadline_hour=15, poll=300):
     bpath = WORK / day / "batch.csv"
     if not bpath.exists():
         print(f"no batch for {day}: nothing to watch")
+        numbers_all()
         return
     shas = {r["sha256"].lower() for r in csv.DictReader(open(bpath, encoding="utf-8"))}
     while True:
@@ -325,6 +326,7 @@ def watch(day, deadline_hour=15, poll=300):
     numbers_pass(day)
     autocheck()
     build(day)
+    numbers_all()
 
 
 def autocheck():
@@ -345,6 +347,19 @@ def autocheck():
             print(f"autocheck {' '.join(args)}: rc={r.returncode} {rep[-1].strip() if rep else ''}", flush=True)
         except Exception as ex:
             print(f"autocheck {' '.join(args)}: {ex}", flush=True)
+
+
+def numbers_all():
+    """817 (Dino 23 Nov): every unchecked order in the queues gets the numbers pass and the auto-check, whatever fed
+    it (mail sweep, hand feeds): numbers_all.sh. Also fills Ronin JT stock codes from the RoninStock export."""
+    import subprocess
+    sh = Path(__file__).resolve().with_name("numbers_all.sh")
+    if sh.exists() and not (ROOT / "flags" / "numbers_pass_off").exists():
+        try:
+            r = subprocess.run(["bash", str(sh)], timeout=12 * 3600)
+            print(f"numbers_all: rc={r.returncode}", flush=True)
+        except Exception as ex:
+            print(f"numbers_all: {ex}", flush=True)
 
 
 def numbers_pass(day):

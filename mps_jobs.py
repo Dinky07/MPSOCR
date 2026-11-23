@@ -144,6 +144,29 @@ def job_desc(r):
     return f"{r['job']} ({', '.join(bits)}; {src})" if bits else f"{r['job']} ({src})"
 
 
+def _near_jobs(idx, digits, letter, day):
+    """817 (review 23 Nov): known jobs of the same series ONE digit away (changed, missing or extra) from a number
+    that is not in the job list, and active on the document's date. The caller only takes a single match."""
+    d = str(int(digits))
+    var = set()
+    for i in range(len(d)):
+        var.add(d[:i] + d[i + 1:])
+        for c in "0123456789":
+            if c != d[i]:
+                var.add(d[:i] + c + d[i + 1:])
+    for i in range(len(d) + 1):
+        for c in "0123456789":
+            var.add(d[:i] + c + d[i:])
+    out = {}
+    for v in var:
+        if not 3 <= len(v) <= 5 or v[0] == "0" or v == d:
+            continue
+        r = idx.get(int(v), {}).get(norm_job(v, letter))
+        if r and r["first"] and _job_gap(r, day) == 0:
+            out[r["job"]] = r
+    return list(out.values())
+
+
 def complete_job(digits, letter, date_iso, chk, written=None):
     """The full job number for digits (+ letter when written) on a document dated date_iso. Adds a check line when
     the letter was filled in, the job isn't in the job list, or the date fits another letter better.
@@ -167,6 +190,11 @@ def complete_job(digits, letter, date_iso, chk, written=None):
         if idx:
             mine = idx.get(n, {}).get(job)
             better = [r for r in cands if r["job"] != job and day and _job_gap(r, day) == 0]
+            if not mine and day and not better and _covered(letter, day):
+                near = _near_jobs(idx, digits, letter, day)
+                if len(near) == 1:               # 32814E read as 52814E / 328141E: the one real job a digit away
+                    chk.append(f"job {job} not in the job list: taken as {job_desc(near[0])}, one digit different - check")
+                    return near[0]["job"], near[0]
             if not mine and (better or _covered(letter, day)):
                 chk.append(f"job {job} not in the job list" + (f"; the order date fits {job_desc(better[0])}" if better else ""))
             elif mine and day and _job_gap(mine, day) > 365 and better:

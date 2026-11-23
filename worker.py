@@ -425,8 +425,13 @@ def normalise(doc_type, raw, cfg, own_vat=()):
         f["job_number_read"] = jn or None
         if jn and jn not in ("CONS", "CONSUMABLES"):
             m = re.fullmatch(r"(?:JOB\s*)?0*(\d{3,5})\s?\.?\s?([A-E])?", jn)
+            chk = []
+            if not m:                                # 817: 103LE -> 1034E (an open 4 read as L), as the order reader does
+                fx, changed = mps_jobs.fix_digits(jn)
+                m = re.fullmatch(r"0*(\d{3,5})([A-E])?", fx) if changed else None
+                if m:
+                    chk.append(f"job read as {jn}: taken as {fx}")
             if m:
-                chk = []
                 job, rec = mps_jobs.complete_job(m.group(1), m.group(2), f.get("date"), chk, written=jn)
                 if job:
                     f["job_number"] = job
@@ -1549,6 +1554,10 @@ class Worker:
                                 self.cpu_cache[key] = (None, [f"cpu_error: {str(e)[:120]}"], "", None)
                         cpu_fields, reasons, text, text_src = self.cpu_cache[key]
                         extra["text_source"] = text_src
+                        if not reasons and text_src == "tesseract" and tcfg.get("cpu_accept_scans") is not True:
+                            # 817 (review 23 Nov): the CPU rules on Tesseract text got 1 of 14 totals right against Sage,
+                            # so a scan always goes to the vision model; text-layer PDFs keep the CPU accept (99.6 %)
+                            reasons = ["scan_not_accepted_on_ocr_text"]
                         if not reasons:
                             raw, npages, extractor = cpu_fields, None, "cpu"
                         else:
@@ -1566,6 +1575,13 @@ class Worker:
                                     extra["hint_source"] = "tesseract (PaddleOCR not available)"
                             raw, npages = extract_builtin(doc_type, part, self.cfg, tcfg, hint)
                             extractor = "gpu_after_cpu"
+                            try:                             # 817: say so when the model did not get every page
+                                _tp = int(re.search(r"Pages:\s+(\d+)", run(["pdfinfo", str(part)], 60)).group(1)) \
+                                    if part.suffix.lower() == ".pdf" else 1
+                            except Exception:
+                                _tp = None
+                            if _tp and npages and _tp > npages:
+                                extra["pages_unread"] = {"pages": _tp, "read": npages}
                     elif tcfg.get("command"):
                         raw, npages = extract_command(doc_type, part, self.cfg, tcfg)
                         extractor = "command"
@@ -1703,6 +1719,9 @@ class Worker:
                             fields.update(jt_copy.classify(part))    # 751: which copy of the carbon JT (paper colour, receiver box)
                     if extractor != "cpu" and doc_type == "supplier_invoice":
                         fields, flags = self.fix_invoice_from_text(fields, flags, part, text, tcfg, extra)
+                    if extra.get("pages_unread"):            # 817
+                        flags = list(flags) + [f"check: {extra['pages_unread']['read']} of {extra['pages_unread']['pages']} pages read: "
+                                               "totals or lines may be on the pages not read"]
                     pt = extra.pop("_paddle_text", None)
                     if pt and doc_type == "supplier_invoice":       # 761: is what the GPU read printed on the scan?
                         chk = paddle_text.verify(fields, pt)

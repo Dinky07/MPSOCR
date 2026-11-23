@@ -18,4 +18,5 @@ for i in $(seq 1 "${MAX_ROUNDS:-9}"); do
 done
 say "auto-check"
 cd $P && python3 -c "import po_daily; po_daily.autocheck()"
+say "Ronin JT stock codes from the capture"; python3 $P/rjt_export_fill.py --apply
 say "done"
