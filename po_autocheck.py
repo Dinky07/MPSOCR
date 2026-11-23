@@ -256,6 +256,8 @@ for t in ("PurchaseOrders", "PolymerOrders"):
                          and why.startswith("spreadsheet disagrees") and not blocking)
         if not why and not f.get("checked") and reg is None and a.no_reader_only:
             why = "no spreadsheet row (--no-reader-only)"
+        if not why and not f.get("checked") and reg is None and not (sc.get("numbers_pass") or {}).get("applied"):
+            why = "no spreadsheet row and no numbers pass (816: reader-only needs the numbers pass)"
         if not why and not f.get("checked") and reg is None and young(f, sc):
             why = f"no spreadsheet row yet (waits {WAIT_DAYS} days from the order date)"
         how = None if why else ("already checked" if f.get("checked") else
