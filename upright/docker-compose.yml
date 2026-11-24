@@ -9,7 +9,7 @@ services:
     container_name: mps-upright
     restart: unless-stopped
     user: "1000:1000"
-    mem_limit: 3g
+    mem_limit: 5g
     ports:
       - "127.0.0.1:8091:8091"
     environment:
